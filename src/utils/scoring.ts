@@ -74,6 +74,68 @@ export function getQuestionTimerState(
   };
 }
 
+export function shuffleQuestions(questions: ExamQuestion[]): ExamQuestion[] {
+  const copy = questions.map((q) => ({
+    ...q,
+    options: { ...q.options },
+    warnings: [...q.warnings],
+  }));
+  for (let i = copy.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [copy[i], copy[j]] = [copy[j], copy[i]];
+  }
+  return copy;
+}
+
+export function buildAnswerDetails(item: QuestionReviewItem): {
+  statusSummary: string;
+  methodOrGuidance: string;
+  isMathQuestion: boolean;
+} {
+  const correctLabel = item.correctOption
+    ? `Option ${item.correctOption} (${item.options[item.correctOption] || '—'})`
+    : 'Not set in answer key';
+  const userLabel = item.confirmedOption
+    ? `Option ${item.confirmedOption} (${item.options[item.confirmedOption] || '—'})`
+    : item.selectedOption
+    ? `Option ${item.selectedOption} (selected but not confirmed)`
+    : 'No option selected';
+
+  const isMathQuestion =
+    /[0-9].*[+\-×÷=²³√πθ≤≥%/:]|speed|train|ratio|percent|profit|interest|area|radius|triangle|solve|evaluate|sum/i.test(
+      item.questionText
+    );
+
+  let statusSummary = '';
+  if (item.outcome === 'correct') {
+    statusSummary = `You confirmed ${userLabel}, which matches the official answer key (+1 mark).`;
+  } else if (item.outcome === 'wrong') {
+    statusSummary = `You confirmed ${userLabel}, which does not match the official answer key (${correctLabel}). Under negative marking, -0.33 marks were deducted.`;
+  } else {
+    statusSummary = item.selectedOption
+      ? `You selected Option ${item.selectedOption} without pressing Confirm Answer, so it was scored as 0 marks. The official answer is ${correctLabel}.`
+      : `You skipped this question (0 marks — no negative penalty). The official answer is ${correctLabel}.`;
+  }
+
+  if (item.explanation && item.explanation.trim()) {
+    return {
+      statusSummary,
+      methodOrGuidance: item.explanation.trim(),
+      isMathQuestion,
+    };
+  }
+
+  const methodOrGuidance = isMathQuestion
+    ? `Mathematical approach: Re-read the given values in Q${item.questionNumber}, write down the governing formula (percentage, ratio, speed = distance/time, or algebraic identity), substitute step-by-step, and verify that the result equals ${correctLabel}. You can also save your own step-by-step solution note below.`
+    : `Key takeaway: The correct answer is ${correctLabel}. Review why ${correctLabel} directly answers the question stem while the other options do not, and save a short study note below for your next shuffled redo.`;
+
+  return {
+    statusSummary,
+    methodOrGuidance,
+    isMathQuestion,
+  };
+}
+
 export function gradeExam(
   questions: ExamQuestion[],
   responses: Record<number, QuestionResponse>,
@@ -127,6 +189,7 @@ export function gradeExam(
       selectedOption,
       confirmedOption,
       correctOption: question.correctOption,
+      explanation: question.explanation,
       outcome,
       marksAwarded,
       timeSpentSeconds,
