@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import {
   Sparkles,
   ArrowRight,
@@ -7,6 +7,7 @@ import {
   FileCheck2,
   History,
   Languages,
+  FolderOpen,
 } from 'lucide-react';
 import { useExamStore } from '../../store/useExamStore';
 import {
@@ -18,7 +19,7 @@ import {
   parseQuestionsFromText,
   PdfExtractionProgress,
 } from '../../utils/pdfParser';
-import { ExamQuestion, OptionKey } from '../../types/exam';
+import { ExamQuestion, OptionKey, SavedExamPackage } from '../../types/exam';
 import { formatDurationReadable } from '../../utils/scoring';
 import { PdfDropzone } from './PdfDropzone';
 
@@ -43,8 +44,12 @@ export const LandingUpload: React.FC = () => {
     setQuestions,
     setPhase,
     loadSampleExam,
+    loadSavedExamPackage,
     clearAttemptHistory,
   } = useExamStore();
+
+  const savedExamInputRef = useRef<HTMLInputElement | null>(null);
+  const [savedExamError, setSavedExamError] = useState<string | null>(null);
 
   const [ocrLanguage, setOcrLanguage] = useState<OcrLanguageOption>('mal+eng');
   const [forceOcr, setForceOcr] = useState<boolean>(false);
@@ -135,6 +140,25 @@ export const LandingUpload: React.FC = () => {
     }
   };
 
+  const handleLoadSavedExamFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setSavedExamError(null);
+
+    try {
+      const raw = await file.text();
+      const parsed = JSON.parse(raw) as SavedExamPackage;
+      if (!parsed || !Array.isArray(parsed.questions) || parsed.questions.length === 0) {
+        setSavedExamError('Invalid exam file. Please choose a .json file saved from this app.');
+        return;
+      }
+      loadSavedExamPackage(parsed, true);
+    } catch {
+      setSavedExamError('Could not read saved exam file. Make sure it is a valid .json file.');
+    }
+  };
+
   const handleProceedToVerify = () => {
     const merged = mergeQuestionsWithAnswerKey(parsedQuestions, parsedAnswerKey);
     setQuestions(merged);
@@ -144,7 +168,6 @@ export const LandingUpload: React.FC = () => {
   return (
     <div className="min-h-screen bg-slate-50 px-4 py-10 sm:px-6 lg:px-8">
       <div className="mx-auto max-w-4xl">
-        {/* Hero */}
         <div className="text-center">
           <div className="inline-flex items-center gap-2 rounded-full border border-indigo-200 bg-indigo-50 px-3 py-1 text-xs font-semibold text-indigo-700">
             <ShieldCheck className="h-3.5 w-3.5" />
@@ -155,12 +178,11 @@ export const LandingUpload: React.FC = () => {
           </h1>
           <p className="mx-auto mt-2 max-w-2xl text-sm text-slate-600">
             Upload a Question Paper PDF and Answer Key PDF (English, Malayalam, or bilingual) to
-            launch a timed solo practice test with overtime tracking, a white Paper Slate, and exact
-            negative marking.
+            launch a timed solo practice test, or load a previously saved exam file for a shuffled
+            redo.
           </p>
         </div>
 
-        {/* Language & OCR Bar */}
         <div className="mt-6 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-indigo-100 bg-white px-4 py-3 shadow-sm">
           <div className="flex items-center gap-2 text-xs font-semibold text-slate-700">
             <Languages className="h-4 w-4 text-indigo-600" />
@@ -187,11 +209,10 @@ export const LandingUpload: React.FC = () => {
           </label>
         </div>
 
-        {/* Dual PDF Dropzones */}
         <div className="mt-5 grid gap-5 sm:grid-cols-2">
           <PdfDropzone
             title="1. Question Paper PDF"
-            subtitle="Auto-detects Malayalam & English, legacy PSC fonts, and scanned PDFs."
+            subtitle="Automatically skips page 1–2 instructions and aligns A–D choices."
             fileName={questionFileName}
             statusMessage={questionStatus}
             progress={questionProgress}
@@ -201,7 +222,7 @@ export const LandingUpload: React.FC = () => {
           />
           <PdfDropzone
             title="2. Answer Key PDF"
-            subtitle="Extracts question → answer mappings from lists, columns, or grid tables."
+            subtitle="Answers stay hidden until the Result screen (no spoilers)."
             fileName={keyFileName}
             statusMessage={keyStatus}
             progress={keyProgress}
@@ -211,7 +232,6 @@ export const LandingUpload: React.FC = () => {
           />
         </div>
 
-        {/* Exam Configuration Card */}
         <div className="mt-6 rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
           <div className="flex items-center gap-2 text-sm font-semibold text-slate-800">
             <Clock className="h-4 w-4 text-indigo-600" />
@@ -275,16 +295,33 @@ export const LandingUpload: React.FC = () => {
           </div>
         </div>
 
-        {/* Action Bar */}
-        <div className="mt-6 flex flex-col items-center justify-between gap-3 sm:flex-row">
-          <button
-            type="button"
-            onClick={loadSampleExam}
-            className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-indigo-200 bg-indigo-50 px-4 py-2.5 text-sm font-semibold text-indigo-700 transition hover:bg-indigo-100 sm:w-auto"
-          >
-            <Sparkles className="h-4 w-4" />
-            Load Sample Math &amp; Text Exam
-          </button>
+        <div className="mt-6 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-2.5">
+            <button
+              type="button"
+              onClick={loadSampleExam}
+              className="inline-flex items-center justify-center gap-2 rounded-lg border border-indigo-200 bg-indigo-50 px-4 py-2.5 text-sm font-semibold text-indigo-700 transition hover:bg-indigo-100"
+            >
+              <Sparkles className="h-4 w-4" />
+              Load Sample Math &amp; Text Exam
+            </button>
+
+            <input
+              ref={savedExamInputRef}
+              type="file"
+              accept="application/json,.json"
+              className="hidden"
+              onChange={handleLoadSavedExamFile}
+            />
+            <button
+              type="button"
+              onClick={() => savedExamInputRef.current?.click()}
+              className="inline-flex items-center justify-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-sm font-semibold text-emerald-800 transition hover:bg-emerald-100"
+            >
+              <FolderOpen className="h-4 w-4" />
+              Load Saved Exam (.json) — Shuffled Redo
+            </button>
+          </div>
 
           <button
             type="button"
@@ -298,7 +335,10 @@ export const LandingUpload: React.FC = () => {
           </button>
         </div>
 
-        {/* Recent Solo Practice History */}
+        {savedExamError && (
+          <p className="mt-3 text-xs font-medium text-rose-600">{savedExamError}</p>
+        )}
+
         {attemptHistory.length > 0 && (
           <div className="mt-10 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
             <div className="flex items-center justify-between">
@@ -351,7 +391,6 @@ export const LandingUpload: React.FC = () => {
           </div>
         )}
 
-        {/* Scoring Rule Footer */}
         <div className="mt-8 flex flex-wrap items-center justify-center gap-4 text-xs text-slate-500">
           <span>
             Confirmed Correct: <strong className="text-emerald-700">+1</strong>
