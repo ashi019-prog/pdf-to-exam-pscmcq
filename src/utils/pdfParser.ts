@@ -56,6 +56,20 @@ const MALAYALAM_DIGIT_MAP: Record<string, string> = {
   '൯': '9',
 };
 
+const INSTRUCTION_PATTERNS: RegExp[] = [
+  /instructions?\s+to\s+candidates?/i,
+  /read\s+the\s+following\s+instructions/i,
+  /question\s+booklet\s+(?:code|series|contains)/i,
+  /register\s+number/i,
+  /omr\s+answer\s+sheet/i,
+  /ball\s*point\s*pen/i,
+  /space\s+for\s+rough\s+work/i,
+  /നിർദ്ദേശങ്ങൾ/,
+  /ഉദ്യോഗാർത്ഥികൾക്കുള്ള\s+നിർദ്ദേശങ്ങൾ/,
+  /രജിസ്റ്റർ\s+നമ്പർ/,
+  /ഒ\.?എം\.?ആർ/,
+];
+
 export function normalizeMalayalamDigits(text: string): string {
   return text.replace(/[൦-൯]/g, (ch) => MALAYALAM_DIGIT_MAP[ch] ?? ch);
 }
@@ -321,6 +335,83 @@ function cleanPreservingMathLines(text: string): string {
     .trim();
 }
 
+function stripBoilerplateFooter(text: string): string {
+  return text
+    .replace(/(?:space\s+for\s+rough\s+work|p\.?t\.?o\.?|please\s+turn\s+over).*/gi, '')
+    .trim();
+}
+
+function looksLikeInstructionBlock(body: string, matchedOptionCount: number): boolean {
+  if (matchedOptionCount >= 2) return false;
+  if (INSTRUCTION_PATTERNS.some((rx) => rx.test(body))) return true;
+  return matchedOptionCount === 0;
+}
+
+interface SequentialOptionMatch {
+  key: OptionKey;
+  matchIndex: number;
+  valueStart: number;
+}
+
+function findSequentialOptions(
+  blockBody: string,
+  labelSets: Array<Record<OptionKey, string[]>>
+): SequentialOptionMatch[] {
+  const firstEndPunct = blockBody.search(/[?.:](?:\s|$)/);
+
+  for (const labelSet of labelSets) {
+    const found: SequentialOptionMatch[] = [];
+    let cursor = 0;
+
+    for (const key of OPTION_KEYS) {
+      const alts = labelSet[key].join('|');
+      const rx = new RegExp(
+        `(?:^|[\\n\\s])(?:\\((${alts})\\)|(${alts})[).:])\\s+`,
+        'gi'
+      );
+
+      let bestMatch: { matchIndex: number; valueStart: number } | null = null;
+      let m: RegExpExecArray | null;
+
+      while ((m = rx.exec(blockBody)) !== null) {
+        const matchStart = m.index;
+        if (matchStart < cursor) continue;
+
+        if (key === 'A' && firstEndPunct > 5 && matchStart < firstEndPunct) {
+          if (!bestMatch) {
+            bestMatch = { matchIndex: matchStart, valueStart: matchStart + m[0].length };
+          }
+          continue;
+        }
+
+        bestMatch = { matchIndex: matchStart, valueStart: matchStart + m[0].length };
+        break;
+      }
+
+      if (bestMatch) {
+        found.push({
+          key,
+          matchIndex: bestMatch.matchIndex,
+          valueStart: bestMatch.valueStart,
+        });
+        cursor = bestMatch.valueStart;
+      }
+    }
+
+    if (found.length >= 2) {
+      return found;
+    }
+  }
+
+  return [];
+}
+
+const OPTION_LABEL_SETS: Array<Record<OptionKey, string[]>> = [
+  { A: ['A'], B: ['B'], C: ['C'], D: ['D'] },
+  { A: ['അ', 'എ'], B: ['ആ', 'ബി'], C: ['ഇ', 'സി'], D: ['ഈ', 'ഡി'] },
+  { A: ['1'], B: ['2'], C: ['3'], D: ['4'] },
+];
+
 export function parseQuestionsFromText(
   rawText: string,
   ocrConfidence?: number
@@ -340,84 +431,73 @@ export function parseQuestionsFromText(
     contentStart: number;
   }
 
-  const matches: RawBlock[] = [];
+  const allMatches: RawBlock[] = [];
   let match: RegExpExecArray | null;
 
   while ((match = questionStartRegex.exec(normalized)) !== null) {
     const num = parseInt(match[1], 10);
     if (Number.isNaN(num) || num <= 0) continue;
 
-    const last = matches[matches.length - 1];
-    if (last && num <= 4 && last.number >= num) {
-      continue;
-    }
-
-    matches.push({
+    allMatches.push({
       number: num,
       startIndex: match.index,
       contentStart: match.index + match[0].length,
     });
   }
 
-  if (matches.length === 0) return [];
+  if (allMatches.length === 0) return [];
 
-  const questions: ExamQuestion[] = [];
+  const parsedCandidates: Array<{
+    question: ExamQuestion;
+    optionCount: number;
+    isInstruction: boolean;
+  }> = [];
 
-  for (let i = 0; i < matches.length; i += 1) {
-    const current = matches[i];
-    const next = matches[i + 1];
+  for (let i = 0; i < allMatches.length; i += 1) {
+    const current = allMatches[i];
+    const next = allMatches[i + 1];
     const blockBody = normalized
       .slice(current.contentStart, next ? next.startIndex : normalized.length)
       .trim();
 
-    questions.push(parseQuestionBlock(current.number, blockBody, ocrConfidence));
+    const { question, optionCount } = parseQuestionBlock(
+      current.number,
+      blockBody,
+      ocrConfidence
+    );
+    const isInstruction = looksLikeInstructionBlock(blockBody, optionCount);
+    parsedCandidates.push({ question, optionCount, isInstruction });
   }
 
-  return questions;
+  const firstMcqIdx = parsedCandidates.findIndex((c) => c.optionCount >= 2);
+  if (firstMcqIdx === -1) {
+    return parsedCandidates
+      .filter((c) => !INSTRUCTION_PATTERNS.some((rx) => rx.test(c.question.text)))
+      .map((c) => c.question);
+  }
+
+  const results: ExamQuestion[] = [];
+  const seenNumbers = new Set<number>();
+
+  for (let i = firstMcqIdx; i < parsedCandidates.length; i += 1) {
+    const item = parsedCandidates[i];
+    if (item.isInstruction) continue;
+    if (seenNumbers.has(item.question.number) && item.optionCount < 2) continue;
+
+    seenNumbers.add(item.question.number);
+    results.push(item.question);
+  }
+
+  return results;
 }
 
 function parseQuestionBlock(
   questionNumber: number,
   blockBody: string,
   ocrConfidence?: number
-): ExamQuestion {
+): { question: ExamQuestion; optionCount: number } {
   const options: Record<OptionKey, string> = { A: '', B: '', C: '', D: '' };
-
-  const alphaOptionRegex = /(?:^|[\n\s])(?:\(([A-Da-d])\)|([A-Da-d])[).:])\s+/g;
-  const malayalamOptionRegex =
-    /(?:^|[\n\s])(?:\((അ|ആ|ഇ|ഈ|എ|ബി|സി|ഡി)\)|(അ|ആ|ഇ|ഈ|എ|ബി|സി|ഡി)[).:])\s+/g;
-  const numericOptionRegex = /(?:^|\n)\s*(?:\(([1-4])\)|([1-4])[).:])\s+/g;
-
-  const extractOptionMatches = (regex: RegExp) => {
-    const found: Array<{ key: OptionKey; matchIndex: number; valueStart: number }> = [];
-    let m: RegExpExecArray | null;
-    while ((m = regex.exec(blockBody)) !== null) {
-      const label = m[1] || m[2];
-      const key = normalizeOptionKey(label);
-      if (!key) continue;
-      if (found.some((f) => f.key === key)) continue;
-      found.push({
-        key,
-        matchIndex: m.index,
-        valueStart: m.index + m[0].length,
-      });
-    }
-    return found;
-  };
-
-  let optionMatches = extractOptionMatches(alphaOptionRegex);
-  if (optionMatches.length < 2) {
-    const malMatches = extractOptionMatches(malayalamOptionRegex);
-    if (malMatches.length >= 2) {
-      optionMatches = malMatches;
-    }
-  }
-  if (optionMatches.length < 2) {
-    const numMatches = extractOptionMatches(numericOptionRegex);
-    if (numMatches.length >= 2) {
-      optionMatches = numMatches;
-    }
-  }
+  const optionMatches = findSequentialOptions(blockBody, OPTION_LABEL_SETS);
 
   let questionText = blockBody;
 
@@ -427,11 +507,14 @@ function parseQuestionBlock(
     for (let i = 0; i < optionMatches.length; i += 1) {
       const cur = optionMatches[i];
       const nxt = optionMatches[i + 1];
-      const val = blockBody
+      let val = blockBody
         .slice(cur.valueStart, nxt ? nxt.matchIndex : blockBody.length)
         .replace(/[ \t]+/g, ' ')
         .replace(/\n+/g, ' ')
         .trim();
+      if (i === optionMatches.length - 1) {
+        val = stripBoilerplateFooter(val);
+      }
       options[cur.key] = val;
     }
   } else {
@@ -441,12 +524,15 @@ function parseQuestionBlock(
   const warnings = computeQuestionWarnings(questionText, options, null, ocrConfidence);
 
   return {
-    number: questionNumber,
-    text: questionText,
-    options,
-    correctOption: null,
-    warnings,
-    ocrConfidence,
+    question: {
+      number: questionNumber,
+      text: questionText,
+      options,
+      correctOption: null,
+      warnings,
+      ocrConfidence,
+    },
+    optionCount: optionMatches.length,
   };
 }
 
