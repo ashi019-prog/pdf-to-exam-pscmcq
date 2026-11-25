@@ -7,12 +7,13 @@ import {
   OptionKey,
   PracticeAttemptRecord,
   QuestionResponse,
+  SavedExamPackage,
   SlateMode,
   SlateStroke,
 } from '../types/exam';
 import { SAMPLE_EXAM_QUESTIONS, SAMPLE_EXAM_TITLE } from '../data/sampleExam';
 import { computeQuestionWarnings } from '../utils/pdfParser';
-import { gradeExam } from '../utils/scoring';
+import { gradeExam, shuffleQuestions } from '../utils/scoring';
 
 interface SlateCanvasState {
   strokes: SlateStroke[];
@@ -26,22 +27,18 @@ interface ExamStoreState {
   responses: Record<number, QuestionResponse>;
   currentIndex: number;
 
-  // Timers
   globalRemainingSeconds: number;
   totalTimeUsedSeconds: number;
   examFinishedAt: number | null;
 
-  // Solo Practice Attempt History
   attemptHistory: PracticeAttemptRecord[];
 
-  // Paper Slate state
   slateOpen: boolean;
   slateHeight: number;
   slateMode: SlateMode;
   slateGridVisible: boolean;
   slates: Record<string, SlateCanvasState>;
 
-  // Setup & Verification actions
   setPhase: (phase: AppPhase) => void;
   updateSettings: (partial: Partial<ExamSettings>) => void;
   setQuestions: (questions: ExamQuestion[]) => void;
@@ -49,15 +46,14 @@ interface ExamStoreState {
   addBlankQuestion: () => void;
   deleteQuestion: (questionNumber: number) => void;
   loadSampleExam: () => void;
+  loadSavedExamPackage: (pkg: SavedExamPackage, shuffle: boolean) => void;
 
-  // Exam lifecycle actions
   startExam: () => void;
   finishExam: () => void;
-  retakeExam: () => void;
+  retakeExam: (shuffle?: boolean) => void;
   resetAll: () => void;
   clearAttemptHistory: () => void;
 
-  // Navigation & Answer actions
   goToQuestion: (index: number) => void;
   nextQuestion: () => void;
   prevQuestion: () => void;
@@ -67,10 +63,8 @@ interface ExamStoreState {
   skipQuestion: () => void;
   clearSelection: () => void;
 
-  // Timer tick (called every 1s during active exam — never auto-skips on question overtime)
   tickTimers: () => void;
 
-  // Paper Slate actions
   setSlateOpen: (open: boolean) => void;
   setSlateHeight: (height: number) => void;
   setSlateMode: (mode: SlateMode) => void;
@@ -211,6 +205,21 @@ export const useExamStore = create<ExamStoreState>()(
           phase: 'verify',
         })),
 
+      loadSavedExamPackage: (pkg, shuffle) => {
+        const prepared = shuffle ? shuffleQuestions(pkg.questions) : pkg.questions;
+        set({
+          settings: { ...DEFAULT_SETTINGS, ...pkg.settings },
+          questions: prepared,
+          phase: 'exam',
+          currentIndex: 0,
+          responses: createInitialResponses(prepared),
+          globalRemainingSeconds: Math.max(1, pkg.settings.globalDurationMinutes || 90) * 60,
+          totalTimeUsedSeconds: 0,
+          examFinishedAt: null,
+          slates: {},
+        });
+      },
+
       startExam: () => {
         const { questions, settings } = get();
         if (questions.length === 0) return;
@@ -242,12 +251,14 @@ export const useExamStore = create<ExamStoreState>()(
           };
         }),
 
-      retakeExam: () => {
+      retakeExam: (shuffle = true) => {
         const { questions, settings } = get();
+        const nextQuestions = shuffle ? shuffleQuestions(questions) : questions;
         set({
           phase: 'exam',
+          questions: nextQuestions,
           currentIndex: 0,
-          responses: createInitialResponses(questions),
+          responses: createInitialResponses(nextQuestions),
           globalRemainingSeconds: Math.max(1, settings.globalDurationMinutes) * 60,
           totalTimeUsedSeconds: 0,
           examFinishedAt: null,
@@ -457,7 +468,6 @@ export const useExamStore = create<ExamStoreState>()(
           };
         }
 
-        // Auto-submit and log attempt when global timer hits 00:00
         if (nextGlobal <= 0) {
           const record = createAttemptRecord(
             state.settings.title,
@@ -478,7 +488,6 @@ export const useExamStore = create<ExamStoreState>()(
           return;
         }
 
-        // Never auto-skip on per-question overtime; timeSpentSeconds continues counting up
         set({
           globalRemainingSeconds: nextGlobal,
           totalTimeUsedSeconds: nextTotalUsed,
