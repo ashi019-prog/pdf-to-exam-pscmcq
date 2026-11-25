@@ -25,8 +25,16 @@ export interface ExamQuestion {
   text: string;
   options: Record<OptionKey, string>;
   correctOption: OptionKey | null;
+  explanation?: string;
   warnings: ParseWarning[];
   ocrConfidence?: number;
+}
+
+export interface SavedExamPackage {
+  version: 1;
+  savedAt: string;
+  settings: ExamSettings;
+  questions: ExamQuestion[];
 }
 
 export interface QuestionResponse {
@@ -82,6 +90,7 @@ export interface QuestionReviewItem {
   selectedOption: OptionKey | null;
   confirmedOption: OptionKey | null;
   correctOption: OptionKey | null;
+  explanation?: string;
   outcome: ReviewOutcome;
   marksAwarded: number;
   timeSpentSeconds: number;
