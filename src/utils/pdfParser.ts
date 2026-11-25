@@ -9,6 +9,9 @@ if (typeof window !== 'undefined' && pdfjsLib.GlobalWorkerOptions) {
   ).toString();
 }
 
+export type OcrLanguageOption = 'mal+eng' | 'eng' | 'mal';
+export type DetectedLanguage = 'malayalam' | 'english' | 'bilingual' | 'unknown';
+
 export interface PdfExtractionProgress {
   stage: 'reading' | 'ocr' | 'parsing';
   currentPage: number;
@@ -16,10 +19,17 @@ export interface PdfExtractionProgress {
   message: string;
 }
 
+export interface PdfExtractionOptions {
+  ocrLanguage?: OcrLanguageOption;
+  forceOcr?: boolean;
+}
+
 export interface PdfTextExtractionResult {
   text: string;
   pageCount: number;
   usedOcr: boolean;
+  detectedLanguage: DetectedLanguage;
+  ocrReason?: 'scanned' | 'legacy_font' | 'forced';
   averageOcrConfidence?: number;
 }
 
@@ -33,8 +43,65 @@ export interface PositionedTextItem {
 const MIN_DIGITAL_CHARS_PER_PAGE = 40;
 const LOW_OCR_CONFIDENCE_THRESHOLD = 72;
 
+const MALAYALAM_DIGIT_MAP: Record<string, string> = {
+  '൦': '0',
+  '൧': '1',
+  '൨': '2',
+  '൩': '3',
+  '൪': '4',
+  '൫': '5',
+  '൬': '6',
+  '൭': '7',
+  '൮': '8',
+  '൯': '9',
+};
+
+export function normalizeMalayalamDigits(text: string): string {
+  return text.replace(/[൦-൯]/g, (ch) => MALAYALAM_DIGIT_MAP[ch] ?? ch);
+}
+
+export function detectTextLanguage(text: string): DetectedLanguage {
+  const malayalamMatches = text.match(/[\u0D00-\u0D7F]/g) ?? [];
+  const englishMatches = text.match(/[A-Za-z]/g) ?? [];
+  const malCount = malayalamMatches.length;
+  const engCount = englishMatches.length;
+
+  if (malCount === 0 && engCount === 0) return 'unknown';
+  if (malCount >= 10 && engCount >= 20) return 'bilingual';
+  if (malCount >= 10) return 'malayalam';
+  if (engCount > 0) return 'english';
+  return 'unknown';
+}
+
+export function isLikelyLegacyNonUnicodeFont(text: string): boolean {
+  const compact = text.replace(/\s+/g, '');
+  if (compact.length < 30) return false;
+
+  const unicodeMalayalamCount = (compact.match(/[\u0D00-\u0D7F]/g) ?? []).length;
+  if (unicodeMalayalamCount >= 15) return false;
+
+  const suspiciousChars = (
+    compact.match(/[\u0080-\u00FF\uFFFD\uE000-\uF8FF]/g) ?? []
+  ).length;
+  const suspiciousRatio = suspiciousChars / compact.length;
+  if (suspiciousRatio >= 0.08) return true;
+
+  const midWordSymbols = (text.match(/[A-Za-z][\]\[\\^_`{}|~][A-Za-z]/g) ?? []).length;
+  if (midWordSymbols >= 5) return true;
+
+  return false;
+}
+
 export function normalizeOptionKey(raw: string): OptionKey | null {
-  const cleaned = raw.trim().toUpperCase().replace(/[^A-D1-4]/g, '');
+  const digitsNormalized = normalizeMalayalamDigits(raw).trim();
+  const stripped = digitsNormalized.replace(/[().:\-\s]/g, '');
+
+  if (stripped === 'അ' || stripped === 'എ') return 'A';
+  if (stripped === 'ആ' || stripped === 'ബി') return 'B';
+  if (stripped === 'ഇ' || stripped === 'സി') return 'C';
+  if (stripped === 'ഈ' || stripped === 'ഡി') return 'D';
+
+  const cleaned = stripped.toUpperCase().replace(/[^A-D1-4]/g, '');
   switch (cleaned) {
     case 'A':
     case '1':
@@ -129,44 +196,72 @@ export function reconstructPageText(
 
 export async function extractTextFromPdf(
   file: File,
-  onProgress?: (progress: PdfExtractionProgress) => void
+  onProgress?: (progress: PdfExtractionProgress) => void,
+  options: PdfExtractionOptions = {}
 ): Promise<PdfTextExtractionResult> {
+  const ocrLanguage: OcrLanguageOption = options.ocrLanguage ?? 'mal+eng';
+  const forceOcr = options.forceOcr ?? false;
+
   const arrayBuffer = await file.arrayBuffer();
   const loadingTask = pdfjsLib.getDocument({ data: new Uint8Array(arrayBuffer) });
   const pdf = await loadingTask.promise;
   const totalPages = pdf.numPages;
 
-  const digitalPages: string[] = [];
+  let combinedDigital = '';
+  let ocrReason: 'scanned' | 'legacy_font' | 'forced' | undefined;
 
-  for (let pageNum = 1; pageNum <= totalPages; pageNum += 1) {
-    onProgress?.({
-      stage: 'reading',
-      currentPage: pageNum,
-      totalPages,
-      message: `Reading page ${pageNum} of ${totalPages}...`,
-    });
-    const page = await pdf.getPage(pageNum);
-    const viewport = page.getViewport({ scale: 1.0 });
-    const content = await page.getTextContent();
-    const pageText = reconstructPageText(
-      content.items as Array<{ str?: string; transform?: number[]; width?: number }>,
-      viewport.width
-    );
-    digitalPages.push(pageText);
+  if (!forceOcr) {
+    const digitalPages: string[] = [];
+
+    for (let pageNum = 1; pageNum <= totalPages; pageNum += 1) {
+      onProgress?.({
+        stage: 'reading',
+        currentPage: pageNum,
+        totalPages,
+        message: `Reading page ${pageNum} of ${totalPages}...`,
+      });
+      const page = await pdf.getPage(pageNum);
+      const viewport = page.getViewport({ scale: 1.0 });
+      const content = await page.getTextContent();
+      const pageText = reconstructPageText(
+        content.items as Array<{ str?: string; transform?: number[]; width?: number }>,
+        viewport.width
+      );
+      digitalPages.push(pageText);
+    }
+
+    combinedDigital = digitalPages.join('\n').trim();
+    const avgCharsPerPage = totalPages > 0 ? combinedDigital.length / totalPages : 0;
+
+    if (avgCharsPerPage < MIN_DIGITAL_CHARS_PER_PAGE) {
+      ocrReason = 'scanned';
+    } else if (isLikelyLegacyNonUnicodeFont(combinedDigital)) {
+      ocrReason = 'legacy_font';
+    } else {
+      return {
+        text: combinedDigital,
+        pageCount: totalPages,
+        usedOcr: false,
+        detectedLanguage: detectTextLanguage(combinedDigital),
+      };
+    }
+  } else {
+    ocrReason = 'forced';
   }
 
-  const combinedDigital = digitalPages.join('\n').trim();
-  const avgCharsPerPage = totalPages > 0 ? combinedDigital.length / totalPages : 0;
+  const langLabel =
+    ocrLanguage === 'mal+eng'
+      ? 'Malayalam + English'
+      : ocrLanguage === 'mal'
+      ? 'Malayalam'
+      : 'English';
 
-  if (avgCharsPerPage >= MIN_DIGITAL_CHARS_PER_PAGE) {
-    return {
-      text: combinedDigital,
-      pageCount: totalPages,
-      usedOcr: false,
-    };
-  }
+  const reasonPrefix =
+    ocrReason === 'legacy_font'
+      ? `Legacy Malayalam font detected — running ${langLabel} OCR`
+      : `Scanning with ${langLabel} OCR`;
 
-  const worker = await createWorker('eng');
+  const worker = await createWorker(ocrLanguage);
   const ocrPages: string[] = [];
   const confidences: number[] = [];
 
@@ -176,7 +271,7 @@ export async function extractTextFromPdf(
         stage: 'ocr',
         currentPage: pageNum,
         totalPages,
-        message: `Scanning page ${pageNum} of ${totalPages}...`,
+        message: `${reasonPrefix}: page ${pageNum} of ${totalPages}...`,
       });
 
       const page = await pdf.getPage(pageNum);
@@ -201,15 +296,18 @@ export async function extractTextFromPdf(
     await worker.terminate();
   }
 
+  const finalOcrText = ocrPages.join('\n').trim();
   const averageOcrConfidence =
     confidences.length > 0
       ? Math.round(confidences.reduce((sum, c) => sum + c, 0) / confidences.length)
       : undefined;
 
   return {
-    text: ocrPages.join('\n').trim(),
+    text: finalOcrText,
     pageCount: totalPages,
     usedOcr: true,
+    detectedLanguage: detectTextLanguage(finalOcrText),
+    ocrReason,
     averageOcrConfidence,
   };
 }
@@ -227,11 +325,14 @@ export function parseQuestionsFromText(
   rawText: string,
   ocrConfidence?: number
 ): ExamQuestion[] {
-  const normalized = rawText.replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim();
+  const normalized = normalizeMalayalamDigits(rawText)
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    .trim();
   if (!normalized) return [];
 
   const questionStartRegex =
-    /(?:^|\n)\s*(?:Q(?:uestion)?\.?\s*)?(\d{1,3})\s*[.):\-]\s+/gi;
+    /(?:^|\n)\s*(?:(?:Q(?:uestion)?|ചോദ്യം)\.?\s*)?(\d{1,3})\s*[.):\-]\s+/gi;
 
   interface RawBlock {
     number: number;
@@ -283,6 +384,8 @@ function parseQuestionBlock(
   const options: Record<OptionKey, string> = { A: '', B: '', C: '', D: '' };
 
   const alphaOptionRegex = /(?:^|[\n\s])(?:\(([A-Da-d])\)|([A-Da-d])[).:])\s+/g;
+  const malayalamOptionRegex =
+    /(?:^|[\n\s])(?:\((അ|ആ|ഇ|ഈ|എ|ബി|സി|ഡി)\)|(അ|ആ|ഇ|ഈ|എ|ബി|സി|ഡി)[).:])\s+/g;
   const numericOptionRegex = /(?:^|\n)\s*(?:\(([1-4])\)|([1-4])[).:])\s+/g;
 
   const extractOptionMatches = (regex: RegExp) => {
@@ -303,6 +406,12 @@ function parseQuestionBlock(
   };
 
   let optionMatches = extractOptionMatches(alphaOptionRegex);
+  if (optionMatches.length < 2) {
+    const malMatches = extractOptionMatches(malayalamOptionRegex);
+    if (malMatches.length >= 2) {
+      optionMatches = malMatches;
+    }
+  }
   if (optionMatches.length < 2) {
     const numMatches = extractOptionMatches(numericOptionRegex);
     if (numMatches.length >= 2) {
@@ -374,7 +483,7 @@ export function computeQuestionWarnings(
   if (typeof ocrConfidence === 'number' && ocrConfidence < LOW_OCR_CONFIDENCE_THRESHOLD) {
     warnings.push({
       type: 'low_ocr_confidence',
-      message: `Low OCR confidence (${ocrConfidence}%). Please verify math & text.`,
+      message: `Low OCR confidence (${ocrConfidence}%). Please verify text carefully.`,
     });
   }
 
@@ -383,10 +492,12 @@ export function computeQuestionWarnings(
 
 export function parseAnswerKeyFromText(rawText: string): Record<number, OptionKey> {
   const keyMap: Record<number, OptionKey> = {};
-  const normalized = rawText.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  const normalized = normalizeMalayalamDigits(rawText)
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n');
 
   const explicitPairRegex =
-    /(?:^|[\s|,;])(?:Q(?:uestion)?\.?\s*)?(\d{1,3})\s*[.):\-–—=]\s*\(?([A-Da-d1-4])\)?(?=$|[\s|,;.)])/gi;
+    /(?:^|[\s|,;])(?:(?:Q(?:uestion)?|ചോദ്യം)\.?\s*)?(\d{1,3})\s*[.):\-–—=]\s*\(?([A-Da-d1-4]|അ|ആ|ഇ|ഈ|എ|ബി|സി|ഡി)\)?(?=$|[\s|,;.)])/gi;
 
   let match: RegExpExecArray | null;
   while ((match = explicitPairRegex.exec(normalized)) !== null) {
