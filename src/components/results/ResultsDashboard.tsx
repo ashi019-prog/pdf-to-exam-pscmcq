@@ -15,8 +15,11 @@ import {
   Gauge,
   History,
   Trash2,
+  Save,
+  Shuffle,
 } from 'lucide-react';
 import { useExamStore } from '../../store/useExamStore';
+import { SavedExamPackage } from '../../types/exam';
 import {
   buildResultsCsv,
   formatDurationReadable,
@@ -66,6 +69,20 @@ export const ResultsDashboard: React.FC = () => {
     URL.revokeObjectURL(url);
   };
 
+  const handleSaveExamPack = () => {
+    const pkg: SavedExamPackage = {
+      version: 1,
+      savedAt: new Date().toISOString(),
+      settings,
+      questions,
+    };
+    triggerDownload(
+      JSON.stringify(pkg, null, 2),
+      'application/json;charset=utf-8;',
+      `${safeSlug}-exam-pack.json`
+    );
+  };
+
   const handleExportCsv = () => {
     const csv = buildResultsCsv(scorecard, settings.title);
     triggerDownload(csv, 'text/csv;charset=utf-8;', `${safeSlug}-scorecard.csv`);
@@ -87,12 +104,11 @@ export const ResultsDashboard: React.FC = () => {
   return (
     <div className="min-h-screen bg-slate-50 px-4 py-8 sm:px-6 lg:px-8">
       <div className="mx-auto max-w-6xl space-y-6">
-        {/* Top Banner */}
         <div className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
           <div>
             <div className="inline-flex items-center gap-1.5 rounded-full bg-indigo-50 px-3 py-1 text-xs font-semibold text-indigo-700">
               <Award className="h-3.5 w-3.5" />
-              Solo Practice Scorecard
+              Solo Practice Scorecard &amp; Answer Key
             </div>
             <h1 className="mt-2 text-2xl font-bold text-slate-900">{settings.title}</h1>
             <p className="mt-0.5 text-xs text-slate-500">
@@ -103,11 +119,20 @@ export const ResultsDashboard: React.FC = () => {
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
+              onClick={handleSaveExamPack}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-3.5 py-2 text-xs font-semibold text-emerald-800 hover:bg-emerald-100 sm:text-sm"
+              title="Save questions, answer key, and notes to your computer for future shuffled redos"
+            >
+              <Save className="h-4 w-4" />
+              Save Exam (.json)
+            </button>
+            <button
+              type="button"
               onClick={handleExportCsv}
               className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 sm:text-sm"
             >
               <Download className="h-4 w-4" />
-              Export Result CSV
+              Export CSV
             </button>
             <button
               type="button"
@@ -119,11 +144,11 @@ export const ResultsDashboard: React.FC = () => {
             </button>
             <button
               type="button"
-              onClick={retakeExam}
+              onClick={() => retakeExam(true)}
               className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3.5 py-2 text-xs font-semibold text-white shadow-sm hover:bg-indigo-700 sm:text-sm"
             >
-              <RotateCcw className="h-4 w-4" />
-              Retake Same Exam
+              <Shuffle className="h-4 w-4" />
+              Redo Exam (Shuffled)
             </button>
             <button
               type="button"
@@ -131,12 +156,11 @@ export const ResultsDashboard: React.FC = () => {
               className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-3.5 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100 sm:text-sm"
             >
               <Upload className="h-4 w-4" />
-              Upload New PDFs
+              New PDFs
             </button>
           </div>
         </div>
 
-        {/* Summary KPI Cards (Final Score, Max Score, Percentage, Accuracy, Total Time, Avg Time/Q) */}
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
           <div className="rounded-2xl border border-indigo-200 bg-indigo-600 p-5 text-white shadow-sm">
             <p className="text-xs font-medium uppercase tracking-wider text-indigo-100">
@@ -209,7 +233,6 @@ export const ResultsDashboard: React.FC = () => {
           </div>
         </div>
 
-        {/* Breakdown Strip */}
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
           <div className="flex items-center gap-3 rounded-xl border border-emerald-200 bg-emerald-50 p-4">
             <CheckCircle2 className="h-6 w-6 shrink-0 text-emerald-600" />
@@ -254,10 +277,8 @@ export const ResultsDashboard: React.FC = () => {
           </div>
         </div>
 
-        {/* Question-by-Question Review Table */}
         <ReviewTable items={scorecard.items} />
 
-        {/* Solo Practice Attempt History */}
         {attemptHistory.length > 0 && (
           <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
             <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-3">
@@ -265,14 +286,24 @@ export const ResultsDashboard: React.FC = () => {
                 <History className="h-4 w-4 text-indigo-600" />
                 Solo Practice Attempt History ({attemptHistory.length})
               </div>
-              <button
-                type="button"
-                onClick={clearAttemptHistory}
-                className="inline-flex items-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1 text-xs font-semibold text-rose-700 hover:bg-rose-100"
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-                Clear History
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => retakeExam(false)}
+                  className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                >
+                  <RotateCcw className="h-3.5 w-3.5" />
+                  Redo in Original Order
+                </button>
+                <button
+                  type="button"
+                  onClick={clearAttemptHistory}
+                  className="inline-flex items-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1 text-xs font-semibold text-rose-700 hover:bg-rose-100"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                  Clear History
+                </button>
+              </div>
             </div>
 
             <div className="mt-3 overflow-x-auto">
