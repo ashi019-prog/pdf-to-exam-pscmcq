@@ -1,9 +1,19 @@
 import React, { useState } from 'react';
-import { Sparkles, ArrowRight, ShieldCheck, Clock, FileCheck2, History } from 'lucide-react';
+import {
+  Sparkles,
+  ArrowRight,
+  ShieldCheck,
+  Clock,
+  FileCheck2,
+  History,
+  Languages,
+} from 'lucide-react';
 import { useExamStore } from '../../store/useExamStore';
 import {
+  DetectedLanguage,
   extractTextFromPdf,
   mergeQuestionsWithAnswerKey,
+  OcrLanguageOption,
   parseAnswerKeyFromText,
   parseQuestionsFromText,
   PdfExtractionProgress,
@@ -11,6 +21,19 @@ import {
 import { ExamQuestion, OptionKey } from '../../types/exam';
 import { formatDurationReadable } from '../../utils/scoring';
 import { PdfDropzone } from './PdfDropzone';
+
+function formatLanguageLabel(lang: DetectedLanguage): string {
+  switch (lang) {
+    case 'malayalam':
+      return 'Malayalam (മലയാളം)';
+    case 'bilingual':
+      return 'Malayalam + English';
+    case 'english':
+      return 'English';
+    default:
+      return 'Unknown';
+  }
+}
 
 export const LandingUpload: React.FC = () => {
   const {
@@ -22,6 +45,9 @@ export const LandingUpload: React.FC = () => {
     loadSampleExam,
     clearAttemptHistory,
   } = useExamStore();
+
+  const [ocrLanguage, setOcrLanguage] = useState<OcrLanguageOption>('mal+eng');
+  const [forceOcr, setForceOcr] = useState<boolean>(false);
 
   const [questionFileName, setQuestionFileName] = useState<string | null>(null);
   const [questionProgress, setQuestionProgress] = useState<PdfExtractionProgress | null>(null);
@@ -45,21 +71,25 @@ export const LandingUpload: React.FC = () => {
     setIsParsingQuestions(true);
 
     try {
-      const result = await extractTextFromPdf(file, setQuestionProgress);
+      const result = await extractTextFromPdf(file, setQuestionProgress, {
+        ocrLanguage,
+        forceOcr,
+      });
       const extracted = parseQuestionsFromText(result.text, result.averageOcrConfidence);
 
       if (extracted.length === 0) {
         setQuestionError(
-          'No structured MCQs were detected. Try another PDF or add questions manually in verification.'
+          'No structured MCQs were detected. Try enabling "Force OCR" for scanned or legacy Malayalam font PDFs.'
         );
       } else {
         const merged = mergeQuestionsWithAnswerKey(extracted, parsedAnswerKey);
         setParsedQuestions(merged);
+        const langBadge = formatLanguageLabel(result.detectedLanguage);
         const ocrNote = result.usedOcr
-          ? ` (OCR${result.averageOcrConfidence ? ` ~${result.averageOcrConfidence}%` : ''})`
+          ? ` • OCR${result.averageOcrConfidence ? ` ~${result.averageOcrConfidence}%` : ''}`
           : '';
         setQuestionStatus(
-          `Extracted ${merged.length} questions from ${result.pageCount} page(s)${ocrNote}.`
+          `Extracted ${merged.length} questions • Detected: ${langBadge}${ocrNote}`
         );
         if (settings.title === 'Untitled Solo Practice Exam') {
           updateSettings({ title: file.name.replace(/\.pdf$/i, '') });
@@ -80,7 +110,10 @@ export const LandingUpload: React.FC = () => {
     setIsParsingKey(true);
 
     try {
-      const result = await extractTextFromPdf(file, setKeyProgress);
+      const result = await extractTextFromPdf(file, setKeyProgress, {
+        ocrLanguage,
+        forceOcr,
+      });
       const keyMap = parseAnswerKeyFromText(result.text);
       const count = Object.keys(keyMap).length;
 
@@ -115,23 +148,50 @@ export const LandingUpload: React.FC = () => {
         <div className="text-center">
           <div className="inline-flex items-center gap-2 rounded-full border border-indigo-200 bg-indigo-50 px-3 py-1 text-xs font-semibold text-indigo-700">
             <ShieldCheck className="h-3.5 w-3.5" />
-            100% Client-Side • GitHub Pages Ready • Auto-Saved Locally
+            100% Client-Side • English &amp; Malayalam (മലയാളം) • Auto-Saved Locally
           </div>
           <h1 className="mt-4 text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl">
             PDF-to-Exam MCQ Practice Studio
           </h1>
           <p className="mx-auto mt-2 max-w-2xl text-sm text-slate-600">
-            Upload a Question Paper PDF and Answer Key PDF (digital or scanned math/text) to launch
-            a timed solo practice test with overtime tracking, a white Paper Slate, and exact
+            Upload a Question Paper PDF and Answer Key PDF (English, Malayalam, or bilingual) to
+            launch a timed solo practice test with overtime tracking, a white Paper Slate, and exact
             negative marking.
           </p>
         </div>
 
+        {/* Language & OCR Bar */}
+        <div className="mt-6 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-indigo-100 bg-white px-4 py-3 shadow-sm">
+          <div className="flex items-center gap-2 text-xs font-semibold text-slate-700">
+            <Languages className="h-4 w-4 text-indigo-600" />
+            <span>PDF / OCR Language:</span>
+            <select
+              value={ocrLanguage}
+              onChange={(e) => setOcrLanguage(e.target.value as OcrLanguageOption)}
+              className="rounded-lg border border-slate-300 bg-slate-50 px-2.5 py-1 text-xs font-semibold text-slate-800 focus:border-indigo-500 focus:outline-none"
+            >
+              <option value="mal+eng">Auto: Malayalam + English (മലയാളം + Eng)</option>
+              <option value="mal">Malayalam Only (മലയാളം)</option>
+              <option value="eng">English Only</option>
+            </select>
+          </div>
+
+          <label className="flex cursor-pointer items-center gap-2 text-xs font-medium text-slate-700">
+            <input
+              type="checkbox"
+              checked={forceOcr}
+              onChange={(e) => setForceOcr(e.target.checked)}
+              className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+            />
+            <span>Force OCR (use if Malayalam PDF text looks garbled)</span>
+          </label>
+        </div>
+
         {/* Dual PDF Dropzones */}
-        <div className="mt-8 grid gap-5 sm:grid-cols-2">
+        <div className="mt-5 grid gap-5 sm:grid-cols-2">
           <PdfDropzone
             title="1. Question Paper PDF"
-            subtitle="Supports single/two-column digital PDFs and scanned math PDFs via auto-OCR."
+            subtitle="Auto-detects Malayalam & English, legacy PSC fonts, and scanned PDFs."
             fileName={questionFileName}
             statusMessage={questionStatus}
             progress={questionProgress}
@@ -165,7 +225,7 @@ export const LandingUpload: React.FC = () => {
                 type="text"
                 value={settings.title}
                 onChange={(e) => updateSettings({ title: e.target.value })}
-                placeholder="e.g., Quantitative Aptitude Mock 01"
+                placeholder="e.g., Kerala PSC LDC Mock Test 01"
                 className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-100"
               />
             </div>
