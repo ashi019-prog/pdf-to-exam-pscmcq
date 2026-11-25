@@ -50,7 +50,7 @@ interface ExamStoreState {
 
   startExam: () => void;
   finishExam: () => void;
-  retakeExam: (shuffle?: boolean) => void;
+  retakeExam: (shuffle?: boolean | unknown) => void;
   resetAll: () => void;
   clearAttemptHistory: () => void;
 
@@ -253,7 +253,8 @@ export const useExamStore = create<ExamStoreState>()(
 
       retakeExam: (shuffle = true) => {
         const { questions, settings } = get();
-        const nextQuestions = shuffle ? shuffleQuestions(questions) : questions;
+        const shouldShuffle = typeof shuffle === 'boolean' ? shuffle : true;
+        const nextQuestions = shouldShuffle ? shuffleQuestions(questions) : questions;
         set({
           phase: 'exam',
           questions: nextQuestions,
