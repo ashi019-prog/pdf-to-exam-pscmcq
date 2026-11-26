@@ -47,7 +47,6 @@ export const ExamHeader: React.FC<ExamHeaderProps> = ({
   return (
     <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/95 shadow-sm backdrop-blur">
       <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3 px-4 py-2.5 sm:px-6">
-        {/* Left: Exam Title & Progress */}
         <div className="min-w-0 flex-1">
           <h1 className="truncate text-sm font-bold text-slate-900 sm:text-base">
             {settings.title}
@@ -58,12 +57,14 @@ export const ExamHeader: React.FC<ExamHeaderProps> = ({
             <span className="mx-2 text-slate-300">|</span>
             Spent on Q{currentQuestion?.number ?? currentIndex + 1}:{' '}
             <span className="font-mono text-slate-700">{formatTimerMMSS(cumulativeSpent)}</span>
+            <span className="mx-2 text-slate-300">|</span>
+            <span className="font-semibold text-emerald-600">+1</span> Correct •{' '}
+            <span className="font-semibold text-rose-600">-0.33</span> Wrong •{' '}
+            <span className="font-semibold text-slate-600">0</span> Skipped
           </p>
         </div>
 
-        {/* Center: Dual Timers + Overtime Counter */}
         <div className="flex flex-wrap items-center gap-2.5">
-          {/* Global Exam Timer */}
           <div
             className={`flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold ${getToneClasses(
               globalTone
@@ -77,7 +78,6 @@ export const ExamHeader: React.FC<ExamHeaderProps> = ({
             </span>
           </div>
 
-          {/* Per-Question Timer or Overtime Counter */}
           {questionTimer.isOvertime ? (
             <div
               className="inline-flex items-center gap-1.5 rounded-lg border border-rose-600 bg-rose-600 px-3 py-1.5 text-xs font-bold text-white shadow-sm animate-pulse"
@@ -105,7 +105,6 @@ export const ExamHeader: React.FC<ExamHeaderProps> = ({
           )}
         </div>
 
-        {/* Right: Palette Toggle & Finish Exam */}
         <div className="flex items-center gap-2">
           <button
             type="button"
