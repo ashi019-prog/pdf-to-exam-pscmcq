@@ -84,7 +84,10 @@ export function shuffleQuestions(questions: ExamQuestion[]): ExamQuestion[] {
     const j = Math.floor(Math.random() * (i + 1));
     [copy[i], copy[j]] = [copy[j], copy[i]];
   }
-  return copy;
+  return copy.map((q, idx) => ({
+    ...q,
+    number: idx + 1,
+  }));
 }
 
 export function buildAnswerDetails(item: QuestionReviewItem): {
