@@ -32,6 +32,7 @@ export interface PdfTextExtractionResult {
   detectedLanguage: DetectedLanguage;
   ocrReason?: 'scanned' | 'legacy_font' | 'forced';
   averageOcrConfidence?: number;
+  questionImages?: Record<number, string>;
 }
 
 export interface PositionedTextItem {
@@ -148,7 +149,15 @@ export function normalizeOptionKey(raw: string): OptionKey | null {
 
   if (stripped === 'അ' || stripped === 'എ' || stripped === 'ക') return 'A';
   if (stripped === 'ആ' || stripped === 'ബി' || stripped === '8') return 'B';
-  if (stripped === 'ഇ' || stripped === 'സി' || stripped === '0' || stripped === 'O' || stripped === 'ധ') return 'C';
+  if (
+    stripped === 'ഇ' ||
+    stripped === 'സി' ||
+    stripped === '0' ||
+    stripped === 'O' ||
+    stripped === 'ധ'
+  ) {
+    return 'C';
+  }
   if (stripped === 'ഈ' || stripped === 'ഡി') return 'D';
 
   const cleaned = stripped.toUpperCase().replace(/[^A-D1-4]/g, '');
@@ -261,6 +270,117 @@ function preprocessCanvasForOcr(canvas: HTMLCanvasElement): void {
   ctx.putImageData(imageData, 0, 0);
 }
 
+async function extractVisualQuestionSnapshots(
+  page: pdfjsLib.PDFPageProxy,
+  rawItems: Array<{ str?: string; transform?: number[]; width?: number }>
+): Promise<Record<number, string>> {
+  const snapshots: Record<number, string> = {};
+  const viewport1x = page.getViewport({ scale: 1.0 });
+  const pageHeight = viewport1x.height;
+
+  const lines: Array<{ y: number; text: string; minX: number }> = [];
+  for (const item of rawItems) {
+    const str = (item.str ?? '').trim();
+    if (!str) continue;
+    const x = item.transform ? item.transform[4] : 0;
+    const y = item.transform ? item.transform[5] : 0;
+    let line = lines.find((l) => Math.abs(l.y - y) < 4);
+    if (!line) {
+      line = { y, text: str, minX: x };
+      lines.push(line);
+    } else {
+      line.text += ` ${str}`;
+      line.minX = Math.min(line.minX, x);
+    }
+  }
+  lines.sort((a, b) => b.y - a.y);
+
+  const qRegions: Array<{
+    qNum: number;
+    topPdfY: number;
+    bottomPdfY: number;
+    needsSnapshot: boolean;
+  }> = [];
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const m = lines[i].text.match(/^(\d{1,3})\./);
+    if (!m || lines[i].minX > 120) continue;
+    const qNum = parseInt(m[1], 10);
+    if (Number.isNaN(qNum) || qNum <= 0) continue;
+
+    const topPdfY = lines[i].y + 18;
+    let bottomPdfY = Math.max(40, lines[i].y - 120);
+    let regionText = lines[i].text;
+
+    for (let j = i + 1; j < lines.length; j += 1) {
+      if (lines[j].minX <= 120 && /^\d{1,3}\./.test(lines[j].text)) {
+        bottomPdfY = lines[j].y + 14;
+        break;
+      }
+      if (/^A\)/.test(lines[j].text.trim())) {
+        bottomPdfY = lines[j].y + 16;
+        break;
+      }
+      regionText += `\n${lines[j].text}`;
+      bottomPdfY = lines[j].y - 10;
+    }
+
+    const hasStackedMath = /[∑∫√]/.test(regionText);
+    const hasTableStructure =
+      /(?:^|\n)\s*i\.\s+.*\bP\.?\b/m.test(regionText) &&
+      /(?:^|\n)\s*ii\.\s+.*\bQ\.?\b/m.test(regionText);
+
+    if (hasStackedMath || hasTableStructure) {
+      qRegions.push({ qNum, topPdfY, bottomPdfY, needsSnapshot: true });
+    }
+  }
+
+  if (qRegions.length === 0) return snapshots;
+
+  const scale = 2.2;
+  const viewport = page.getViewport({ scale });
+  const fullCanvas = document.createElement('canvas');
+  fullCanvas.width = Math.ceil(viewport.width);
+  fullCanvas.height = Math.ceil(viewport.height);
+  const fullCtx = fullCanvas.getContext('2d');
+  if (!fullCtx) return snapshots;
+
+  fullCtx.fillStyle = '#ffffff';
+  fullCtx.fillRect(0, 0, fullCanvas.width, fullCanvas.height);
+  await page.render({ canvasContext: fullCtx, viewport }).promise;
+
+  for (const reg of qRegions) {
+    const cropTopPx = Math.max(0, Math.floor((pageHeight - reg.topPdfY) * scale));
+    const cropBottomPx = Math.min(
+      fullCanvas.height,
+      Math.ceil((pageHeight - reg.bottomPdfY) * scale)
+    );
+    const cropHeight = cropBottomPx - cropTopPx;
+    if (cropHeight < 20) continue;
+
+    const cropCanvas = document.createElement('canvas');
+    cropCanvas.width = fullCanvas.width;
+    cropCanvas.height = cropHeight;
+    const cropCtx = cropCanvas.getContext('2d');
+    if (!cropCtx) continue;
+
+    cropCtx.drawImage(
+      fullCanvas,
+      0,
+      cropTopPx,
+      fullCanvas.width,
+      cropHeight,
+      0,
+      0,
+      fullCanvas.width,
+      cropHeight
+    );
+    snapshots[reg.qNum] = cropCanvas.toDataURL('image/png');
+  }
+
+  return snapshots;
+}
+
 export async function extractTextFromPdf(
   file: File,
   onProgress?: (progress: PdfExtractionProgress) => void,
@@ -274,6 +394,7 @@ export async function extractTextFromPdf(
   const pdf = await loadingTask.promise;
   const totalPages = pdf.numPages;
 
+  const questionImages: Record<number, string> = {};
   const pageResults: Array<{
     pageNum: number;
     text: string;
@@ -292,10 +413,8 @@ export async function extractTextFromPdf(
     const page = await pdf.getPage(pageNum);
     const viewport = page.getViewport({ scale: 1.0 });
     const content = await page.getTextContent();
-    const rawDigital = reconstructPageText(
-      content.items as Array<{ str?: string; transform?: number[]; width?: number }>,
-      viewport.width
-    );
+    const rawItems = content.items as Array<{ str?: string; transform?: number[]; width?: number }>;
+    const rawDigital = reconstructPageText(rawItems, viewport.width);
 
     if (!forceOcr) {
       if (isBlankOrRoughWorkPage(rawDigital)) {
@@ -309,20 +428,27 @@ export async function extractTextFromPdf(
 
       if (rawDigital.trim().length < MIN_DIGITAL_CHARS_PER_PAGE) {
         pageResults.push({ pageNum, text: '', needsOcr: true, reason: 'scanned' });
-      } else if (isLikelyLegacyNonUnicodeFont(rawDigital)) {
-        const cleaned = stripPageHeadersAndFooters(rawDigital);
-        const converted = convertShreeMalToUnicode(cleaned);
-        pageResults.push({
-          pageNum,
-          text: converted,
-          needsOcr: false,
-        });
       } else {
-        pageResults.push({
-          pageNum,
-          text: stripPageHeadersAndFooters(rawDigital),
-          needsOcr: false,
-        });
+        if (typeof document !== 'undefined') {
+          const pageSnaps = await extractVisualQuestionSnapshots(page, rawItems);
+          Object.assign(questionImages, pageSnaps);
+        }
+
+        if (isLikelyLegacyNonUnicodeFont(rawDigital)) {
+          const cleaned = stripPageHeadersAndFooters(rawDigital);
+          const converted = convertShreeMalToUnicode(cleaned);
+          pageResults.push({
+            pageNum,
+            text: converted,
+            needsOcr: false,
+          });
+        } else {
+          pageResults.push({
+            pageNum,
+            text: stripPageHeadersAndFooters(rawDigital),
+            needsOcr: false,
+          });
+        }
       }
     } else {
       if (isBlankOrRoughWorkPage(rawDigital)) {
@@ -407,6 +533,7 @@ export async function extractTextFromPdf(
     detectedLanguage: detectTextLanguage(finalText),
     ocrReason,
     averageOcrConfidence,
+    questionImages,
   };
 }
 
@@ -513,7 +640,8 @@ function findSequentialOptions(blockBody: string): SequentialOptionMatch[] {
 
 export function parseQuestionsFromText(
   rawText: string,
-  ocrConfidence?: number
+  ocrConfidence?: number,
+  questionImages?: Record<number, string>
 ): ExamQuestion[] {
   const cleanedRaw = stripPageHeadersAndFooters(normalizeMalayalamDigits(rawText))
     .replace(/\r\n/g, '\n')
@@ -584,7 +712,8 @@ export function parseQuestionsFromText(
     const { question, optionCount } = parseQuestionBlock(
       current.number,
       blockBody,
-      ocrConfidence
+      ocrConfidence,
+      questionImages?.[current.number]
     );
 
     if (looksLikeInstructionBlock(blockBody, optionCount) && results.length === 0) {
@@ -600,7 +729,8 @@ export function parseQuestionsFromText(
 function parseQuestionBlock(
   questionNumber: number,
   blockBody: string,
-  ocrConfidence?: number
+  ocrConfidence?: number,
+  imageDataUrl?: string
 ): { question: ExamQuestion; optionCount: number } {
   const options: Record<OptionKey, string> = { A: '', B: '', C: '', D: '' };
   const optionMatches = findSequentialOptions(blockBody);
@@ -635,6 +765,7 @@ function parseQuestionBlock(
       text: questionText,
       options,
       correctOption: null,
+      imageDataUrl,
       warnings,
       ocrConfidence,
     },
