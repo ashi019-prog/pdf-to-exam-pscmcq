@@ -65,11 +65,57 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({
         </span>
       </div>
 
-      {question.imageDataUrl ? (
+      {/* Structured Recreated Table from PDF (e.g., Q36, Q37) */}
+      {question.table ? (
+        <div className="mt-5 space-y-4">
+          {question.table.introText && (
+            <p className="whitespace-pre-wrap text-base font-medium leading-relaxed text-slate-900 sm:text-lg">
+              {question.table.introText}
+            </p>
+          )}
+
+          <div className="overflow-x-auto">
+            <table className="w-full border-collapse border border-slate-400 text-left text-sm sm:text-base">
+              <thead>
+                <tr className="bg-slate-100">
+                  {question.table.headers.map((header, idx) => (
+                    <th
+                      key={idx}
+                      className="border border-slate-400 px-4 py-2.5 font-bold text-slate-900"
+                    >
+                      {header}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {question.table.rows.map((row, rowIdx) => (
+                  <tr key={rowIdx} className="bg-white">
+                    {row.map((cell, cellIdx) => (
+                      <td
+                        key={cellIdx}
+                        className="border border-slate-400 px-4 py-2.5 align-middle text-slate-900"
+                      >
+                        {cell}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {question.table.outroText && (
+            <p className="whitespace-pre-wrap text-base font-medium leading-relaxed text-slate-900 sm:text-lg">
+              {question.table.outroText}
+            </p>
+          )}
+        </div>
+      ) : question.imageDataUrl ? (
         <div className="mt-5 overflow-hidden rounded-xl border border-slate-200 bg-white p-2">
           <img
             src={question.imageDataUrl}
-            alt={`Question ${question.number} diagram or table`}
+            alt={`Question ${question.number} mathematical equation`}
             className="mx-auto h-auto max-w-full"
           />
         </div>
