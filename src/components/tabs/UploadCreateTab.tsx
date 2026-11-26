@@ -868,4 +868,60 @@ export const UploadCreateTab: React.FC<UploadCreateTabProps> = ({
                     )}
                   </button>
                   {jsonShowNearDupes && (
-                    <div className="mt-2.5 space
+                    <div className="mt-2.5 space-y-2">
+                      {jsonNearDuplicateEntries.map((entry) => (
+                        <label
+                          key={entry.question.id}
+                          className="flex items-start gap-2 rounded-lg border border-amber-200 bg-white p-2"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={!jsonExcludedIds[entry.question.id]}
+                            onChange={(e) =>
+                              setJsonExcludedIds((prev) => ({
+                                ...prev,
+                                [entry.question.id]: !e.target.checked,
+                              }))
+                            }
+                            className="mt-0.5"
+                          />
+                          <div>
+                            <p className="font-semibold text-slate-800">{entry.question.text}</p>
+                            <p className="mt-0.5 text-[11px] text-amber-700">
+                              {Math.round(entry.match.similarityScore * 100)}% similar to Pool Q
+                              {entry.match.matchedExistingQuestion.poolNumber}
+                            </p>
+                          </div>
+                        </label>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <div className="flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setJsonPreview(null)}
+                  className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                >
+                  Choose Different File
+                </button>
+                <button
+                  type="button"
+                  disabled={jsonImporting}
+                  onClick={handleCommitJsonImport}
+                  className="rounded-lg bg-emerald-600 px-5 py-2 text-xs font-semibold text-white hover:bg-emerald-700 disabled:bg-slate-300"
+                >
+                  {jsonImporting
+                    ? 'Importing...'
+                    : `Import & Merge (${jsonWillAddCount} New Questions)`}
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
