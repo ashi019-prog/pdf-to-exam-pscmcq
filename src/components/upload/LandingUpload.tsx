@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useRef, useState } from 'react';
 import {
   Sparkles,
   ArrowRight,
@@ -9,9 +9,6 @@ import {
   Languages,
   FolderOpen,
   BookOpen,
-  Play,
-  Shuffle,
-  Database,
 } from 'lucide-react';
 import { useExamStore } from '../../store/useExamStore';
 import {
@@ -28,7 +25,8 @@ import { ExamQuestion, OPTION_KEYS, OptionKey, SavedExamPackage } from '../../ty
 import { formatDurationReadable } from '../../utils/scoring';
 import { PdfDropzone } from './PdfDropzone';
 import { FolderStatusBadge } from '../storage/FolderStatusBadge';
-import { ExamHeadSummary, localFolderStorage } from '../../services/localFolderStorage';
+import { ExamHeadDashboard } from '../examHead/ExamHeadDashboard';
+import { MockExamLauncher } from '../launcher/MockExamLauncher';
 
 function formatLanguageLabel(lang: DetectedLanguage): string {
   switch (lang) {
@@ -72,7 +70,8 @@ export const LandingUpload: React.FC = () => {
   const savedExamInputRef = useRef<HTMLInputElement | null>(null);
   const [savedExamError, setSavedExamError] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
-  const [examHeads, setExamHeads] = useState<ExamHeadSummary[]>([]);
+  const [launcherOpen, setLauncherOpen] = useState<boolean>(false);
+  const [launcherHeadId, setLauncherHeadId] = useState<string | null>(null);
 
   const [ocrLanguage, setOcrLanguage] = useState<OcrLanguageOption>('mal+eng');
   const [forceOcr, setForceOcr] = useState<boolean>(false);
@@ -98,55 +97,6 @@ export const LandingUpload: React.FC = () => {
   const showToast = (msg: string) => {
     setToastMessage(msg);
     window.setTimeout(() => setToastMessage(null), 4000);
-  };
-
-  useEffect(() => {
-    const refreshExamHeads = () => {
-      void localFolderStorage
-        .listExamHeads()
-        .then(setExamHeads)
-        .catch(() => {});
-    };
-
-    void localFolderStorage.checkStoredFolder().then(refreshExamHeads);
-    const unsub = localFolderStorage.subscribe(refreshExamHeads);
-    return unsub;
-  }, []);
-
-  const handleLaunchExamHead = async (slug: string, shuffle: boolean) => {
-    try {
-      const head = await localFolderStorage.getExamHead(slug);
-      if (!head || head.questions.length === 0) {
-        showToast('This Exam Head has no questions yet.');
-        return;
-      }
-
-      const mappedQuestions: ExamQuestion[] = head.questions.map((q, idx) => ({
-        number: idx + 1,
-        text: q.text,
-        options: q.options,
-        correctOption: q.correctOption,
-        explanation: q.explanation,
-        imageDataUrl: q.imageDataUrl,
-        table: q.table,
-        warnings: [],
-      }));
-
-      loadSavedExamPackage(
-        {
-          version: 1,
-          savedAt: head.updatedAt,
-          settings: {
-            ...settings,
-            title: head.title,
-          },
-          questions: mappedQuestions,
-        },
-        shuffle
-      );
-    } catch {
-      showToast('Could not open Exam Head from storage.');
-    }
   };
 
   const applyBookletCode = (
@@ -304,7 +254,6 @@ export const LandingUpload: React.FC = () => {
   return (
     <div className="min-h-screen bg-slate-50 px-4 py-6 sm:px-6 lg:px-8">
       <div className="mx-auto max-w-4xl">
-        {/* Top Bar with Local Folder Sync Status Pill */}
         <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
           <div className="inline-flex items-center gap-2 rounded-full border border-indigo-200 bg-indigo-50 px-3 py-1 text-xs font-semibold text-indigo-700">
             <ShieldCheck className="h-3.5 w-3.5" />
@@ -313,18 +262,16 @@ export const LandingUpload: React.FC = () => {
           <FolderStatusBadge onStatusToast={showToast} />
         </div>
 
-        {/* Hero */}
         <div className="text-center">
           <h1 className="text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl">
             PDF-to-Exam MCQ Practice Studio
           </h1>
           <p className="mx-auto mt-2 max-w-2xl text-sm text-slate-600">
             Upload a Question Paper PDF and Answer Key PDF (English, Malayalam, or bilingual) to
-            save silently to your local Exam Heads folder or launch a timed solo practice test.
+            save silently to your local Exam Heads folder or launch a randomized mock test.
           </p>
         </div>
 
-        {/* Language, Booklet Code & OCR Bar */}
         <div className="mt-6 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-indigo-100 bg-white px-4 py-3 shadow-sm">
           <div className="flex flex-wrap items-center gap-4">
             <div className="flex items-center gap-2 text-xs font-semibold text-slate-700">
@@ -370,7 +317,6 @@ export const LandingUpload: React.FC = () => {
           </label>
         </div>
 
-        {/* Dual PDF Dropzones */}
         <div className="mt-5 grid gap-5 sm:grid-cols-2">
           <PdfDropzone
             title="1. Question Paper PDF"
@@ -394,56 +340,18 @@ export const LandingUpload: React.FC = () => {
           />
         </div>
 
-        {/* Saved Exam Heads Library */}
-        {examHeads.length > 0 && (
-          <div className="mt-6 rounded-xl border border-emerald-200 bg-white p-5 shadow-sm">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2 text-sm font-bold text-slate-900">
-                <Database className="h-4 w-4 text-emerald-600" />
-                Saved Exam Heads ({examHeads.length})
-              </div>
-              <span className="text-xs text-slate-500">Auto-synced from exam-heads/</span>
-            </div>
+        <ExamHeadDashboard
+          onLaunchMock={(headId) => {
+            setLauncherHeadId(headId);
+            setLauncherOpen(true);
+          }}
+          onAddAnotherPaper={(head) => {
+            updateSettings({ title: head.name });
+            showToast(`Upload a new PDF above to append to "${head.name}".`);
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+          }}
+        />
 
-            <div className="mt-3 grid gap-3 sm:grid-cols-2">
-              {examHeads.map((head) => (
-                <div
-                  key={head.id}
-                  className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50/70 px-3.5 py-3"
-                >
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-bold text-slate-900">{head.title}</p>
-                    <p className="text-xs text-slate-500">
-                      {head.totalQuestions} questions • {head.paperCount} paper
-                      {head.paperCount === 1 ? '' : 's'}
-                    </p>
-                  </div>
-                  <div className="flex shrink-0 items-center gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => handleLaunchExamHead(head.id, false)}
-                      className="inline-flex items-center gap-1 rounded-lg bg-indigo-600 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700"
-                    >
-                      <Play className="h-3 w-3" />
-                      Practice
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleLaunchExamHead(head.id, true)}
-                      className="inline-flex items-center gap-1 rounded-lg border border-emerald-300 bg-emerald-50 px-2.5 py-1.5 text-xs font-semibold text-emerald-800 hover:bg-emerald-100"
-                      title="Start with shuffled questions"
-                    >
-                      <Shuffle className="h-3 w-3" />
-                      Shuffle
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Exam Configuration Card */}
         <div className="mt-6 rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
           <div className="flex items-center gap-2 text-sm font-semibold text-slate-800">
             <Clock className="h-4 w-4 text-indigo-600" />
@@ -507,7 +415,6 @@ export const LandingUpload: React.FC = () => {
           </div>
         </div>
 
-        {/* Action Bar */}
         <div className="mt-6 flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-wrap items-center gap-2.5">
             <button
@@ -552,7 +459,6 @@ export const LandingUpload: React.FC = () => {
           <p className="mt-3 text-xs font-medium text-rose-600">{savedExamError}</p>
         )}
 
-        {/* Recent Solo Practice History */}
         {attemptHistory.length > 0 && (
           <div className="mt-10 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
             <div className="flex items-center justify-between">
@@ -605,7 +511,6 @@ export const LandingUpload: React.FC = () => {
           </div>
         )}
 
-        {/* Scoring Rule Footer */}
         <div className="mt-8 flex flex-wrap items-center justify-center gap-4 text-xs text-slate-500">
           <span>
             Confirmed Correct: <strong className="text-emerald-700">+1</strong>
@@ -622,6 +527,12 @@ export const LandingUpload: React.FC = () => {
           <span>Shortcuts: A–D / 1–4, Enter (Confirm), Arrow Keys</span>
         </div>
       </div>
+
+      <MockExamLauncher
+        open={launcherOpen}
+        initialExamHeadId={launcherHeadId}
+        onClose={() => setLauncherOpen(false)}
+      />
 
       {toastMessage && (
         <div className="fixed bottom-5 right-5 z-50 rounded-xl border border-emerald-200 bg-emerald-700 px-4 py-2.5 text-xs font-semibold text-white shadow-lg">
