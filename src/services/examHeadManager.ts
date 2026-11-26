@@ -15,9 +15,6 @@ function generateId(): string {
   return `q-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-/**
- * Normalizes any stored ExamHead JSON (including earlier ExamHeadFile format) into the unified ExamHead schema.
- */
 function normalizeStoredExamHead(raw: unknown): ExamHead | null {
   if (!raw || typeof raw !== 'object') return null;
   const obj = raw as Record<string, unknown>;
@@ -144,9 +141,6 @@ export async function getExamHead(
   return normalizeStoredExamHead(raw);
 }
 
-/**
- * Creates a new Exam Head JSON file in exam-heads/. Blocks accidental overwrites of an existing Exam Head.
- */
 export async function createExamHead(
   name: string,
   adapter: ExamHeadStorageAdapter = defaultAdapter
@@ -182,11 +176,6 @@ export interface AppendPaperMetaInput {
   duplicatesRemoved: number;
 }
 
-/**
- * Strictly non-destructive append: loads existing ExamHead, preserves every existing question,
- * validates all incoming options A–D and embedded correctOption, assigns sequential poolNumber,
- * verifies merged count, and writes atomically.
- */
 export async function appendPaperToExamHead(
   examHeadId: string,
   verifiedQuestions: IncomingVerifiedQuestion[],
@@ -379,4 +368,26 @@ export async function deleteExamHead(
   if (adapter.deleteRaw) {
     await adapter.deleteRaw(examHeadId);
   }
+}
+
+export async function renameExamHead(
+  examHeadId: string,
+  newName: string,
+  adapter: ExamHeadStorageAdapter = defaultAdapter
+): Promise<ExamHead> {
+  const trimmed = newName.trim();
+  if (!trimmed) {
+    throw new Error('Exam Head name cannot be empty.');
+  }
+  const existing = await getExamHead(examHeadId, adapter);
+  if (!existing) {
+    throw new Error(`Exam Head "${examHeadId}" was not found.`);
+  }
+  const updated: ExamHead = {
+    ...existing,
+    name: trimmed,
+    updatedAt: new Date().toISOString(),
+  };
+  await adapter.writeRaw(existing.id, updated);
+  return updated;
 }
