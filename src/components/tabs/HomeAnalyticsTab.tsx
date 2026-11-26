@@ -224,7 +224,7 @@ export const HomeAnalyticsTab: React.FC<HomeAnalyticsTabProps> = ({
               </div>
               <p className="mt-3 text-sm font-bold text-slate-900">Try Sample Exam</p>
               <p className="mt-1 text-xs text-slate-500">
-                Test the 90:00 timer, 01:30 overtime tracker, Paper Slate, and +1/-0.33 scoring now.
+                Test the 90:00 timer, 01:30 overtime tracker, Paper Slate, and instant scorecard now.
               </p>
             </button>
           </div>
@@ -510,7 +510,7 @@ export const HomeAnalyticsTab: React.FC<HomeAnalyticsTabProps> = ({
                     <div className="flex items-center justify-between gap-4">
                       <span className="inline-flex items-center gap-1.5 font-semibold text-emerald-700">
                         <span className="h-2.5 w-2.5 rounded-full bg-emerald-500" />
-                        Correct (+1)
+                        Correct
                       </span>
                       <span className="font-bold text-slate-900">
                         {summary.totalCorrect} ({correctPct}%)
@@ -519,7 +519,7 @@ export const HomeAnalyticsTab: React.FC<HomeAnalyticsTabProps> = ({
                     <div className="flex items-center justify-between gap-4">
                       <span className="inline-flex items-center gap-1.5 font-semibold text-rose-700">
                         <span className="h-2.5 w-2.5 rounded-full bg-rose-600" />
-                        Wrong (-0.33)
+                        Wrong
                       </span>
                       <span className="font-bold text-slate-900">
                         {summary.totalWrong} ({wrongPct}%)
@@ -528,7 +528,7 @@ export const HomeAnalyticsTab: React.FC<HomeAnalyticsTabProps> = ({
                     <div className="flex items-center justify-between gap-4">
                       <span className="inline-flex items-center gap-1.5 font-semibold text-slate-600">
                         <span className="h-2.5 w-2.5 rounded-full bg-slate-400" />
-                        Skipped (0)
+                        Skipped
                       </span>
                       <span className="font-bold text-slate-900">
                         {summary.totalSkipped} ({skippedPct}%)
