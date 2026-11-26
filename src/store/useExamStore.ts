@@ -14,6 +14,7 @@ import {
 import { SAMPLE_EXAM_QUESTIONS, SAMPLE_EXAM_TITLE } from '../data/sampleExam';
 import { computeQuestionWarnings } from '../utils/pdfParser';
 import { gradeExam, shuffleQuestions } from '../utils/scoring';
+import { localFolderStorage } from '../services/localFolderStorage';
 
 interface SlateCanvasState {
   strokes: SlateStroke[];
@@ -307,6 +308,7 @@ export const useExamStore = create<ExamStoreState>()(
             state.totalTimeUsedSeconds,
             state.settings.perQuestionDurationSeconds
           );
+          void localFolderStorage.saveAttemptResult(record).catch(() => {});
           return {
             phase: 'results',
             slateOpen: false,
@@ -358,9 +360,9 @@ export const useExamStore = create<ExamStoreState>()(
           if (!existing || existing.status === 'not_visited') {
             updatedResponses[targetQ.number] = {
               questionNumber: targetQ.number,
-              selectedOption: existing?.selectedOption ?? null,
+              selectedOption: existing ? existing.selectedOption : null,
               status: 'visited',
-              timeSpentSeconds: existing?.timeSpentSeconds ?? 0,
+              timeSpentSeconds: existing ? existing.timeSpentSeconds : 0,
             };
           }
 
@@ -479,9 +481,9 @@ export const useExamStore = create<ExamStoreState>()(
           if (!nextPrev || nextPrev.status === 'not_visited') {
             updatedResponses[nextQ.number] = {
               questionNumber: nextQ.number,
-              selectedOption: nextPrev?.selectedOption ?? null,
+              selectedOption: nextPrev ? nextPrev.selectedOption : null,
               status: 'visited',
-              timeSpentSeconds: nextPrev?.timeSpentSeconds ?? 0,
+              timeSpentSeconds: nextPrev ? nextPrev.timeSpentSeconds : 0,
             };
           }
         }
@@ -541,6 +543,7 @@ export const useExamStore = create<ExamStoreState>()(
             nextTotalUsed,
             state.settings.perQuestionDurationSeconds
           );
+          void localFolderStorage.saveAttemptResult(record).catch(() => {});
           set({
             globalRemainingSeconds: 0,
             totalTimeUsedSeconds: nextTotalUsed,
