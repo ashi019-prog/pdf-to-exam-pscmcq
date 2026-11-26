@@ -154,9 +154,9 @@ export function gradeExam(
 
   const items: QuestionReviewItem[] = questions.map((question) => {
     const response = responses[question.number];
-    const selectedOption = response?.selectedOption ?? null;
-    const status = response?.status ?? 'not_visited';
-    const timeSpentSeconds = response?.timeSpentSeconds ?? 0;
+    const selectedOption = response ? response.selectedOption : null;
+    const status = response ? response.status : 'not_visited';
+    const timeSpentSeconds = response ? response.timeSpentSeconds : 0;
     const confirmedOption = status === 'confirmed' ? selectedOption : null;
 
     const overtimeSeconds = Math.max(0, timeSpentSeconds - perQuestionLimitSeconds);
@@ -193,6 +193,10 @@ export function gradeExam(
       confirmedOption,
       correctOption: question.correctOption,
       explanation: question.explanation,
+      imageDataUrl: question.imageDataUrl,
+      table: question.table,
+      paperLabel: question.paperLabel,
+      sourceQuestionId: question.sourceQuestionId,
       outcome,
       marksAwarded,
       timeSpentSeconds,
@@ -264,5 +268,21 @@ export function buildResultsCsv(scorecard: ExamScorecard, examTitle: string): st
     escapeCsvField(item.overtimeSeconds),
   ]);
 
-  return [header.join(','), ...rows.map((r) => r.join(','))].join('\n');
+  const summary = [
+    [],
+    ['Summary', 'Final Score', 'Total Marks', 'Percentage', 'Accuracy', 'Correct', 'Wrong', 'Skipped', 'Overtime Qs'],
+    [
+      escapeCsvField(examTitle),
+      escapeCsvField(scorecard.finalScore),
+      escapeCsvField(scorecard.totalMarks),
+      escapeCsvField(`${scorecard.percentage}%`),
+      escapeCsvField(`${scorecard.accuracy}%`),
+      escapeCsvField(scorecard.correctCount),
+      escapeCsvField(scorecard.wrongCount),
+      escapeCsvField(scorecard.skippedCount),
+      escapeCsvField(scorecard.overtimeCount),
+    ],
+  ];
+
+  return [header.join(','), ...rows.map((r) => r.join(',')), ...summary.map((r) => r.join(','))].join('\n');
 }
