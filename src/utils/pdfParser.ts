@@ -66,6 +66,7 @@ const INSTRUCTION_PATTERNS: RegExp[] = [
   /space\s+for\s+rough\s+work/i,
   /നിർദ്ദേശങ്ങൾ/,
   /ഉദ്യോഗാർത്ഥികൾക്കുള്ള\s+നിർദ്ദേശങ്ങൾ/,
+  /ചോദ്യപുസ്തക\s+അക്ഷരകോഡ്/,
   /രജിസ്റ്റർ\s+നമ്പർ/,
   /ഒ\.?എം\.?ആർ/,
 ];
@@ -97,23 +98,57 @@ export function isLikelyLegacyNonUnicodeFont(text: string): boolean {
   const suspiciousChars = (
     compact.match(/[\u0080-\u00FF\uFFFD\uE000-\uF8FF]/g) ?? []
   ).length;
-  const suspiciousRatio = suspiciousChars / compact.length;
-  if (suspiciousRatio >= 0.08) return true;
+  if (suspiciousChars / compact.length >= 0.06) return true;
 
-  const midWordSymbols = (text.match(/[A-Za-z][\]\[\\^_`{}|~][A-Za-z]/g) ?? []).length;
-  if (midWordSymbols >= 5) return true;
+  const midWordSymbols = (
+    text.match(/[A-Za-z][\]\[\\^_`{}|~¡¢£¤¥¦§¨©ª«¬®¯°±²³´µ¶·¸¹º»¼½¾¿][A-Za-z]/g) ?? []
+  ).length;
+  if (midWordSymbols >= 4) return true;
 
   return false;
+}
+
+function isBlankOrRoughWorkPage(digitalText: string): boolean {
+  const stripped = stripPageHeadersAndFooters(digitalText)
+    .replace(/space\s+for\s+rough\s+work/gi, '')
+    .trim();
+  return stripped.length < 15 && digitalText.trim().length > 0;
+}
+
+function isDigitalInstructionsOnlyPage(digitalText: string): boolean {
+  if (digitalText.length < 200) return false;
+  const hasOptionMarkers =
+    /(?:^|[\n\s])A\)\s+/m.test(digitalText) && /(?:^|[\n\s])B\)\s+/m.test(digitalText);
+  if (hasOptionMarkers) return false;
+
+  const numberedLines = (digitalText.match(/(?:^|\n)\s*\d{1,2}\.\s+/g) ?? []).length;
+  const mentionsSeries = /\bA,\s*B,\s*C,\s*D\b|\(A\),\s*\(B\),\s*\(C\),\s*\(D\)/.test(digitalText);
+  return numberedLines >= 5 && mentionsSeries;
+}
+
+export function stripPageHeadersAndFooters(text: string): string {
+  return text
+    .split('\n')
+    .filter((rawLine) => {
+      const line = rawLine.trim();
+      if (!line) return true;
+      if (/^\d{1,4}\/\d{2,4}-[A-Z]$/i.test(line)) return false;
+      if (/^(?:[A-D]\s+)?-\s*\d{1,3}\s*-$/i.test(line)) return false;
+      if (/^[A-D]$/.test(line)) return false;
+      if (/^space\s+for\s+rough\s+work$/i.test(line)) return false;
+      return true;
+    })
+    .join('\n');
 }
 
 export function normalizeOptionKey(raw: string): OptionKey | null {
   const digitsNormalized = normalizeMalayalamDigits(raw).trim();
   const stripped = digitsNormalized.replace(/[().:\-\s]/g, '');
 
-  if (stripped === 'അ' || stripped === 'എ') return 'A';
-  if (stripped === 'ആ' || stripped === 'ബി') return 'B';
+  if (stripped === 'അ' || stripped === 'എ' || stripped === 'ക') return 'A';
+  if (stripped === 'ആ' || stripped === 'ബി' || stripped === '8') return 'B';
   if (stripped === 'ഇ' || stripped === 'സി') return 'C';
-  if (stripped === 'ഈ' || stripped === 'ഡി') return 'D';
+  if (stripped === 'ഈ' || stripped === 'ഡി' || stripped === '0' || stripped === 'O') return 'D';
 
   const cleaned = stripped.toUpperCase().replace(/[^A-D1-4]/g, '');
   switch (cleaned) {
@@ -208,6 +243,23 @@ export function reconstructPageText(
   return sortColumnLines(positioned);
 }
 
+function preprocessCanvasForOcr(canvas: HTMLCanvasElement): void {
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const data = imageData.data;
+
+  for (let i = 0; i < data.length; i += 4) {
+    const gray = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+    const val = gray > 215 ? 255 : gray < 135 ? 0 : gray;
+    data[i] = val;
+    data[i + 1] = val;
+    data[i + 2] = val;
+  }
+
+  ctx.putImageData(imageData, 0, 0);
+}
+
 export async function extractTextFromPdf(
   file: File,
   onProgress?: (progress: PdfExtractionProgress) => void,
@@ -221,106 +273,131 @@ export async function extractTextFromPdf(
   const pdf = await loadingTask.promise;
   const totalPages = pdf.numPages;
 
-  let combinedDigital = '';
-  let ocrReason: 'scanned' | 'legacy_font' | 'forced' | undefined;
+  const pageResults: Array<{
+    pageNum: number;
+    text: string;
+    needsOcr: boolean;
+    reason?: 'scanned' | 'legacy_font' | 'forced';
+  }> = [];
 
-  if (!forceOcr) {
-    const digitalPages: string[] = [];
+  for (let pageNum = 1; pageNum <= totalPages; pageNum += 1) {
+    onProgress?.({
+      stage: 'reading',
+      currentPage: pageNum,
+      totalPages,
+      message: `Analyzing page ${pageNum} of ${totalPages}...`,
+    });
 
-    for (let pageNum = 1; pageNum <= totalPages; pageNum += 1) {
-      onProgress?.({
-        stage: 'reading',
-        currentPage: pageNum,
-        totalPages,
-        message: `Reading page ${pageNum} of ${totalPages}...`,
-      });
-      const page = await pdf.getPage(pageNum);
-      const viewport = page.getViewport({ scale: 1.0 });
-      const content = await page.getTextContent();
-      const pageText = reconstructPageText(
-        content.items as Array<{ str?: string; transform?: number[]; width?: number }>,
-        viewport.width
-      );
-      digitalPages.push(pageText);
-    }
+    const page = await pdf.getPage(pageNum);
+    const viewport = page.getViewport({ scale: 1.0 });
+    const content = await page.getTextContent();
+    const rawDigital = reconstructPageText(
+      content.items as Array<{ str?: string; transform?: number[]; width?: number }>,
+      viewport.width
+    );
 
-    combinedDigital = digitalPages.join('\n').trim();
-    const avgCharsPerPage = totalPages > 0 ? combinedDigital.length / totalPages : 0;
+    if (!forceOcr) {
+      if (isBlankOrRoughWorkPage(rawDigital)) {
+        pageResults.push({ pageNum, text: '', needsOcr: false });
+        continue;
+      }
+      if (pageNum <= 2 && isDigitalInstructionsOnlyPage(rawDigital)) {
+        pageResults.push({ pageNum, text: '', needsOcr: false });
+        continue;
+      }
 
-    if (avgCharsPerPage < MIN_DIGITAL_CHARS_PER_PAGE) {
-      ocrReason = 'scanned';
-    } else if (isLikelyLegacyNonUnicodeFont(combinedDigital)) {
-      ocrReason = 'legacy_font';
+      if (rawDigital.trim().length < MIN_DIGITAL_CHARS_PER_PAGE) {
+        pageResults.push({ pageNum, text: '', needsOcr: true, reason: 'scanned' });
+      } else if (isLikelyLegacyNonUnicodeFont(rawDigital)) {
+        pageResults.push({ pageNum, text: '', needsOcr: true, reason: 'legacy_font' });
+      } else {
+        pageResults.push({
+          pageNum,
+          text: stripPageHeadersAndFooters(rawDigital),
+          needsOcr: false,
+        });
+      }
     } else {
-      return {
-        text: combinedDigital,
-        pageCount: totalPages,
-        usedOcr: false,
-        detectedLanguage: detectTextLanguage(combinedDigital),
-      };
+      if (isBlankOrRoughWorkPage(rawDigital)) {
+        pageResults.push({ pageNum, text: '', needsOcr: false });
+      } else {
+        pageResults.push({ pageNum, text: '', needsOcr: true, reason: 'forced' });
+      }
     }
-  } else {
-    ocrReason = 'forced';
   }
 
-  const langLabel =
-    ocrLanguage === 'mal+eng'
-      ? 'Malayalam + English'
-      : ocrLanguage === 'mal'
-      ? 'Malayalam'
-      : 'English';
-
-  const reasonPrefix =
-    ocrReason === 'legacy_font'
-      ? `Legacy Malayalam font detected — running ${langLabel} OCR`
-      : `Scanning with ${langLabel} OCR`;
-
-  const worker = await createWorker(ocrLanguage);
-  const ocrPages: string[] = [];
+  const pagesNeedingOcr = pageResults.filter((p) => p.needsOcr);
+  let usedOcr = false;
+  let ocrReason: 'scanned' | 'legacy_font' | 'forced' | undefined;
   const confidences: number[] = [];
 
-  try {
-    for (let pageNum = 1; pageNum <= totalPages; pageNum += 1) {
-      onProgress?.({
-        stage: 'ocr',
-        currentPage: pageNum,
-        totalPages,
-        message: `${reasonPrefix}: page ${pageNum} of ${totalPages}...`,
-      });
+  if (pagesNeedingOcr.length > 0) {
+    usedOcr = true;
+    ocrReason = pagesNeedingOcr[0].reason;
 
-      const page = await pdf.getPage(pageNum);
-      const viewport = page.getViewport({ scale: 2.5 });
-      const canvas = document.createElement('canvas');
-      canvas.width = Math.ceil(viewport.width);
-      canvas.height = Math.ceil(viewport.height);
-      const ctx = canvas.getContext('2d');
+    const langLabel =
+      ocrLanguage === 'mal+eng'
+        ? 'Malayalam + English'
+        : ocrLanguage === 'mal'
+        ? 'Malayalam'
+        : 'English';
 
-      if (!ctx) {
-        throw new Error('Could not initialize 2D canvas context for OCR.');
+    const worker = await createWorker(ocrLanguage);
+
+    try {
+      for (let i = 0; i < pagesNeedingOcr.length; i += 1) {
+        const entry = pagesNeedingOcr[i];
+        onProgress?.({
+          stage: 'ocr',
+          currentPage: i + 1,
+          totalPages: pagesNeedingOcr.length,
+          message: `Scanning ${langLabel} OCR — page ${entry.pageNum} (${i + 1}/${pagesNeedingOcr.length})...`,
+        });
+
+        const page = await pdf.getPage(entry.pageNum);
+        const viewport = page.getViewport({ scale: 3.0 });
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.ceil(viewport.width);
+        canvas.height = Math.ceil(viewport.height);
+        const ctx = canvas.getContext('2d');
+
+        if (!ctx) {
+          throw new Error('Could not initialize 2D canvas context for OCR.');
+        }
+
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        await page.render({ canvasContext: ctx, viewport }).promise;
+        preprocessCanvasForOcr(canvas);
+
+        const { data } = await worker.recognize(canvas);
+        entry.text = stripPageHeadersAndFooters(data.text);
+        if (typeof data.confidence === 'number') {
+          confidences.push(data.confidence);
+        }
       }
-
-      await page.render({ canvasContext: ctx, viewport }).promise;
-      const { data } = await worker.recognize(canvas);
-      ocrPages.push(data.text);
-      if (typeof data.confidence === 'number') {
-        confidences.push(data.confidence);
-      }
+    } finally {
+      await worker.terminate();
     }
-  } finally {
-    await worker.terminate();
   }
 
-  const finalOcrText = ocrPages.join('\n').trim();
+  const finalText = pageResults
+    .map((p) => p.text)
+    .filter((t) => t.trim().length > 0)
+    .join('\n')
+    .trim();
+
   const averageOcrConfidence =
     confidences.length > 0
       ? Math.round(confidences.reduce((sum, c) => sum + c, 0) / confidences.length)
       : undefined;
 
   return {
-    text: finalOcrText,
+    text: finalText,
     pageCount: totalPages,
-    usedOcr: true,
-    detectedLanguage: detectTextLanguage(finalOcrText),
+    usedOcr,
+    detectedLanguage: detectTextLanguage(finalText),
     ocrReason,
     averageOcrConfidence,
   };
@@ -353,48 +430,69 @@ interface SequentialOptionMatch {
   valueStart: number;
 }
 
-function findSequentialOptions(
-  blockBody: string,
-  labelSets: Array<Record<OptionKey, string[]>>
-): SequentialOptionMatch[] {
-  const firstEndPunct = blockBody.search(/[?.:](?:\s|$)/);
+const OPTION_LABEL_SETS: Array<Record<OptionKey, string[]>> = [
+  {
+    A: ['A', 'a', 'ക', '4', 'Ä'],
+    B: ['B', 'b', '8', 'ß'],
+    C: ['C', 'c', '©'],
+    D: ['D', 'd', '0', 'O'],
+  },
+  {
+    A: ['അ', 'എ'],
+    B: ['ആ', 'ബി'],
+    C: ['ഇ', 'സി'],
+    D: ['ഈ', 'ഡി'],
+  },
+  {
+    A: ['1'],
+    B: ['2'],
+    C: ['3'],
+    D: ['4'],
+  },
+];
 
-  for (const labelSet of labelSets) {
+function findSequentialOptions(blockBody: string): SequentialOptionMatch[] {
+  const buildRegex = (alts: string[]) => {
+    const joined = alts.join('|');
+    return new RegExp(`(?:^|\\n|[ \\t]{2,}|\\s)(?:\\((${joined})\\)|(${joined})[).:])\\s+`, 'g');
+  };
+
+  for (const labelSet of OPTION_LABEL_SETS) {
     const found: SequentialOptionMatch[] = [];
     let cursor = 0;
 
     for (const key of OPTION_KEYS) {
-      const alts = labelSet[key].join('|');
-      const rx = new RegExp(
-        `(?:^|[\\n\\s])(?:\\((${alts})\\)|(${alts})[).:])\\s+`,
-        'gi'
-      );
+      const primaryChars = [labelSet[key][0], ...(labelSet[key][1] ? [labelSet[key][1]] : [])];
+      const allChars = labelSet[key];
 
-      let bestMatch: { matchIndex: number; valueStart: number } | null = null;
-      let m: RegExpExecArray | null;
-
-      while ((m = rx.exec(blockBody)) !== null) {
-        const matchStart = m.index;
-        if (matchStart < cursor) continue;
-
-        if (key === 'A' && firstEndPunct > 5 && matchStart < firstEndPunct) {
-          if (!bestMatch) {
-            bestMatch = { matchIndex: matchStart, valueStart: matchStart + m[0].length };
-          }
-          continue;
+      const searchWith = (chars: string[]) => {
+        const rx = buildRegex(chars);
+        let m: RegExpExecArray | null;
+        while ((m = rx.exec(blockBody)) !== null) {
+          const full = m[0];
+          const leadingWs = full.length - full.trimStart().length;
+          const markerStart = m.index + leadingWs;
+          if (markerStart < cursor) continue;
+          return {
+            matchIndex: markerStart,
+            valueStart: m.index + full.length,
+          };
         }
+        return null;
+      };
 
-        bestMatch = { matchIndex: matchStart, valueStart: matchStart + m[0].length };
-        break;
+      let best = searchWith(primaryChars);
+      if (!best && allChars.length > primaryChars.length) {
+        best = searchWith(allChars);
       }
 
-      if (bestMatch) {
+      if (best) {
         found.push({
           key,
-          matchIndex: bestMatch.matchIndex,
-          valueStart: bestMatch.valueStart,
+          matchIndex: best.matchIndex,
+          valueStart: best.valueStart,
         });
-        cursor = bestMatch.valueStart;
+        cursor = best.valueStart;
       }
     }
 
@@ -406,58 +504,74 @@ function findSequentialOptions(
   return [];
 }
 
-const OPTION_LABEL_SETS: Array<Record<OptionKey, string[]>> = [
-  { A: ['A'], B: ['B'], C: ['C'], D: ['D'] },
-  { A: ['അ', 'എ'], B: ['ആ', 'ബി'], C: ['ഇ', 'സി'], D: ['ഈ', 'ഡി'] },
-  { A: ['1'], B: ['2'], C: ['3'], D: ['4'] },
-];
-
 export function parseQuestionsFromText(
   rawText: string,
   ocrConfidence?: number
 ): ExamQuestion[] {
-  const normalized = normalizeMalayalamDigits(rawText)
+  const cleanedRaw = stripPageHeadersAndFooters(normalizeMalayalamDigits(rawText))
     .replace(/\r\n/g, '\n')
     .replace(/\r/g, '\n')
     .trim();
-  if (!normalized) return [];
+  if (!cleanedRaw) return [];
 
   const questionStartRegex =
     /(?:^|\n)\s*(?:(?:Q(?:uestion)?|ചോദ്യം)\.?\s*)?(\d{1,3})\s*[.):\-]\s+/gi;
 
-  interface RawBlock {
+  interface RawMarker {
     number: number;
     startIndex: number;
     contentStart: number;
   }
 
-  const allMatches: RawBlock[] = [];
+  const allMarkers: RawMarker[] = [];
   let match: RegExpExecArray | null;
 
-  while ((match = questionStartRegex.exec(normalized)) !== null) {
+  while ((match = questionStartRegex.exec(cleanedRaw)) !== null) {
     const num = parseInt(match[1], 10);
-    if (Number.isNaN(num) || num <= 0) continue;
+    if (Number.isNaN(num) || num <= 0 || num > 300) continue;
 
-    allMatches.push({
+    allMarkers.push({
       number: num,
       startIndex: match.index,
       contentStart: match.index + match[0].length,
     });
   }
 
-  if (allMatches.length === 0) return [];
+  if (allMarkers.length === 0) return [];
 
-  const parsedCandidates: Array<{
-    question: ExamQuestion;
-    optionCount: number;
-    isInstruction: boolean;
-  }> = [];
+  let firstMcqMarkerIdx = -1;
+  for (let i = 0; i < allMarkers.length; i += 1) {
+    const cur = allMarkers[i];
+    const nxt = allMarkers[i + 1];
+    const snippet = cleanedRaw.slice(cur.contentStart, nxt ? nxt.startIndex : cleanedRaw.length);
+    if (findSequentialOptions(snippet).length >= 2) {
+      firstMcqMarkerIdx = i;
+      break;
+    }
+  }
 
-  for (let i = 0; i < allMatches.length; i += 1) {
-    const current = allMatches[i];
-    const next = allMatches[i + 1];
-    const blockBody = normalized
-      .slice(current.contentStart, next ? next.startIndex : normalized.length)
+  if (firstMcqMarkerIdx === -1) {
+    firstMcqMarkerIdx = 0;
+  }
+
+  const questionMarkers: RawMarker[] = [allMarkers[firstMcqMarkerIdx]];
+  let lastQuestionNum = allMarkers[firstMcqMarkerIdx].number;
+
+  for (let i = firstMcqMarkerIdx + 1; i < allMarkers.length; i += 1) {
+    const candidate = allMarkers[i];
+    if (candidate.number > lastQuestionNum && candidate.number <= lastQuestionNum + 10) {
+      questionMarkers.push(candidate);
+      lastQuestionNum = candidate.number;
+    }
+  }
+
+  const results: ExamQuestion[] = [];
+
+  for (let i = 0; i < questionMarkers.length; i += 1) {
+    const current = questionMarkers[i];
+    const next = questionMarkers[i + 1];
+    const blockBody = cleanedRaw
+      .slice(current.contentStart, next ? next.startIndex : cleanedRaw.length)
       .trim();
 
     const { question, optionCount } = parseQuestionBlock(
@@ -465,27 +579,12 @@ export function parseQuestionsFromText(
       blockBody,
       ocrConfidence
     );
-    const isInstruction = looksLikeInstructionBlock(blockBody, optionCount);
-    parsedCandidates.push({ question, optionCount, isInstruction });
-  }
 
-  const firstMcqIdx = parsedCandidates.findIndex((c) => c.optionCount >= 2);
-  if (firstMcqIdx === -1) {
-    return parsedCandidates
-      .filter((c) => !INSTRUCTION_PATTERNS.some((rx) => rx.test(c.question.text)))
-      .map((c) => c.question);
-  }
+    if (looksLikeInstructionBlock(blockBody, optionCount) && results.length === 0) {
+      continue;
+    }
 
-  const results: ExamQuestion[] = [];
-  const seenNumbers = new Set<number>();
-
-  for (let i = firstMcqIdx; i < parsedCandidates.length; i += 1) {
-    const item = parsedCandidates[i];
-    if (item.isInstruction) continue;
-    if (seenNumbers.has(item.question.number) && item.optionCount < 2) continue;
-
-    seenNumbers.add(item.question.number);
-    results.push(item.question);
+    results.push(question);
   }
 
   return results;
@@ -497,7 +596,7 @@ function parseQuestionBlock(
   ocrConfidence?: number
 ): { question: ExamQuestion; optionCount: number } {
   const options: Record<OptionKey, string> = { A: '', B: '', C: '', D: '' };
-  const optionMatches = findSequentialOptions(blockBody, OPTION_LABEL_SETS);
+  const optionMatches = findSequentialOptions(blockBody);
 
   let questionText = blockBody;
 
