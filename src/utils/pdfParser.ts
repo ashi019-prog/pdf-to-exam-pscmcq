@@ -147,8 +147,8 @@ export function normalizeOptionKey(raw: string): OptionKey | null {
 
   if (stripped === 'അ' || stripped === 'എ' || stripped === 'ക') return 'A';
   if (stripped === 'ആ' || stripped === 'ബി' || stripped === '8') return 'B';
-  if (stripped === 'ഇ' || stripped === 'സി') return 'C';
-  if (stripped === 'ഈ' || stripped === 'ഡി' || stripped === '0' || stripped === 'O') return 'D';
+  if (stripped === 'ഇ' || stripped === 'സി' || stripped === '0' || stripped === 'O') return 'C';
+  if (stripped === 'ഈ' || stripped === 'ഡി') return 'D';
 
   const cleaned = stripped.toUpperCase().replace(/[^A-D1-4]/g, '');
   switch (cleaned) {
@@ -434,7 +434,7 @@ const OPTION_LABEL_SETS: Array<Record<OptionKey, string[]>> = [
   {
     A: ['A', 'a', 'ക', '4', 'Ä'],
     B: ['B', 'b', '8', 'ß'],
-    C: ['C', 'c', '©'],
+    C: ['C', 'c', '0', 'O', '©'],
     D: ['D', 'd', '0', 'O'],
   },
   {
@@ -454,7 +454,7 @@ const OPTION_LABEL_SETS: Array<Record<OptionKey, string[]>> = [
 function findSequentialOptions(blockBody: string): SequentialOptionMatch[] {
   const buildRegex = (alts: string[]) => {
     const joined = alts.join('|');
-    return new RegExp(`(?:^|\\n|[ \\t]{2,}|\\s)(?:\\((${joined})\\)|(${joined})[).:])\\s+`, 'g');
+    return new RegExp(`(?:^|\\n|[ \\t]{2,}|\\s)(?:\\((${joined})\\)|(${joined})[).:])\\s*`, 'g');
   };
 
   for (const labelSet of OPTION_LABEL_SETS) {
@@ -515,7 +515,7 @@ export function parseQuestionsFromText(
   if (!cleanedRaw) return [];
 
   const questionStartRegex =
-    /(?:^|\n)\s*(?:(?:Q(?:uestion)?|ചോദ്യം)\.?\s*)?(\d{1,3})\s*[.):\-]\s+/gi;
+    /(?:^|\n)\s*(?:(?:Q(?:uestion)?|ചോദ്യം)\.?\s*)?(\d{1,3})\s*[.):\-](?=\s*[^\d\n])/gi;
 
   interface RawMarker {
     number: number;
@@ -559,7 +559,7 @@ export function parseQuestionsFromText(
 
   for (let i = firstMcqMarkerIdx + 1; i < allMarkers.length; i += 1) {
     const candidate = allMarkers[i];
-    if (candidate.number > lastQuestionNum && candidate.number <= lastQuestionNum + 10) {
+    if (candidate.number > lastQuestionNum && candidate.number <= lastQuestionNum + 25) {
       questionMarkers.push(candidate);
       lastQuestionNum = candidate.number;
     }
