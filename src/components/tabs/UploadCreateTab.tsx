@@ -325,9 +325,9 @@ export const UploadCreateTab: React.FC<UploadCreateTabProps> = ({
     setJsonError(null);
     try {
       const result = await commitImportedPackage(jsonPreview, {
-        mode: jsonTargetMode,
-        customNewName: jsonTargetMode === 'create-new' ? jsonCustomName : undefined,
-        excludeIncomingIds: Object.keys(jsonExcludedIds).filter((id) => jsonExcludedIds[id]),
+        targetMode: jsonTargetMode,
+        customExamName: jsonTargetMode === 'create-new' ? jsonCustomName : undefined,
+        excludedQuestionIds: Object.keys(jsonExcludedIds).filter((id) => jsonExcludedIds[id]),
       });
       setJsonSuccess({
         examHead: result.examHead,
@@ -343,11 +343,23 @@ export const UploadCreateTab: React.FC<UploadCreateTabProps> = ({
     }
   };
 
-  const jsonExcludedNearCount = jsonPreview
-    ? jsonPreview.nearDuplicates.filter((d) => jsonExcludedIds[d.incoming.id]).length
-    : 0;
+  const jsonNearDuplicateEntries = jsonPreview
+    ? jsonPreview.netNewQuestions
+        .filter((q) => Boolean(jsonPreview.nearDuplicateMatches[q.id]))
+        .map((q) => ({
+          question: q,
+          match: jsonPreview.nearDuplicateMatches[q.id],
+        }))
+    : [];
+
+  const jsonExcludedNearCount = jsonNearDuplicateEntries.filter(
+    (entry) => jsonExcludedIds[entry.question.id]
+  ).length;
+
   const jsonWillAddCount = jsonPreview
-    ? Math.max(0, jsonPreview.newQuestions.length - jsonExcludedNearCount)
+    ? jsonTargetMode === 'create-new'
+      ? Math.max(0, jsonPreview.packageData.questions.length - jsonExcludedNearCount)
+      : Math.max(0, jsonPreview.netNewQuestions.length - jsonExcludedNearCount)
     : 0;
 
   return (
@@ -797,13 +809,13 @@ export const UploadCreateTab: React.FC<UploadCreateTabProps> = ({
                   <div className="rounded-lg bg-white p-2.5 border border-slate-200">
                     <p className="font-semibold text-slate-500">Exact Duplicates</p>
                     <p className="mt-0.5 text-base font-extrabold text-slate-700">
-                      {jsonPreview.exactDuplicates.length}
+                      {jsonPreview.exactDuplicateCount}
                     </p>
                   </div>
                   <div className="rounded-lg bg-white p-2.5 border border-slate-200">
                     <p className="font-semibold text-slate-500">Near Duplicates</p>
                     <p className="mt-0.5 text-base font-extrabold text-amber-700">
-                      {jsonPreview.nearDuplicates.length}
+                      {jsonNearDuplicateEntries.length}
                     </p>
                   </div>
                 </div>
@@ -839,7 +851,7 @@ export const UploadCreateTab: React.FC<UploadCreateTabProps> = ({
                 </div>
               )}
 
-              {jsonPreview.nearDuplicates.length > 0 && (
+              {jsonNearDuplicateEntries.length > 0 && (
                 <div className="rounded-xl border border-amber-200 bg-amber-50/50 p-3 text-xs">
                   <button
                     type="button"
@@ -847,7 +859,7 @@ export const UploadCreateTab: React.FC<UploadCreateTabProps> = ({
                     className="flex w-full items-center justify-between font-semibold text-amber-900"
                   >
                     <span>
-                      Review {jsonPreview.nearDuplicates.length} Near-Duplicate Question(s)
+                      Review {jsonNearDuplicateEntries.length} Near-Duplicate Question(s)
                     </span>
                     {jsonShowNearDupes ? (
                       <ChevronUp className="h-4 w-4" />
@@ -856,60 +868,4 @@ export const UploadCreateTab: React.FC<UploadCreateTabProps> = ({
                     )}
                   </button>
                   {jsonShowNearDupes && (
-                    <div className="mt-2.5 space-y-2">
-                      {jsonPreview.nearDuplicates.map((item) => (
-                        <label
-                          key={item.incoming.id}
-                          className="flex items-start gap-2 rounded-lg border border-amber-200 bg-white p-2"
-                        >
-                          <input
-                            type="checkbox"
-                            checked={!jsonExcludedIds[item.incoming.id]}
-                            onChange={(e) =>
-                              setJsonExcludedIds((prev) => ({
-                                ...prev,
-                                [item.incoming.id]: !e.target.checked,
-                              }))
-                            }
-                            className="mt-0.5"
-                          />
-                          <div>
-                            <p className="font-semibold text-slate-800">{item.incoming.text}</p>
-                            <p className="mt-0.5 text-[11px] text-amber-700">
-                              {Math.round(item.similarityScore * 100)}% similar to Pool Q
-                              {item.matchedExisting.poolNumber}
-                            </p>
-                          </div>
-                        </label>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
-
-              <div className="flex items-center justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={() => setJsonPreview(null)}
-                  className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-                >
-                  Choose Different File
-                </button>
-                <button
-                  type="button"
-                  disabled={jsonImporting}
-                  onClick={handleCommitJsonImport}
-                  className="rounded-lg bg-emerald-600 px-5 py-2 text-xs font-semibold text-white hover:bg-emerald-700 disabled:bg-slate-300"
-                >
-                  {jsonImporting
-                    ? 'Importing...'
-                    : `Import & Merge (${jsonWillAddCount} New Questions)`}
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-};
+                    <div className="mt-2.5 space
