@@ -68,6 +68,7 @@ const BASE_MAP: Record<string, string> = {
   '²': 'ജ്ജ',
   '³': 'ജ്ഞ',
   'µ': 'ഞ്ച',
+  'μ': 'ഞ്ച',
   '¹': 'ണ്ണ',
   'º': 'ണ്ട',
   '¼': 'ണ്ഡ',
@@ -119,19 +120,99 @@ const BASE_MAP: Record<string, string> = {
   '&': '-',
 };
 
+const ENGLISH_KEEP_WORDS = new Set([
+  'UPI',
+  'RBI',
+  'SEBI',
+  'NPCI',
+  'TRAI',
+  'LAN',
+  'WAN',
+  'MAN',
+  'PAN',
+  'UMANG',
+  'DISHA',
+  'BNS',
+  'OMR',
+  'G20',
+  'PDF',
+  'OCR',
+  'mmHg',
+  'g',
+  'kg',
+  'cm',
+  'm',
+  'km',
+  'and',
+  'or',
+  'of',
+  'in',
+  'to',
+  'for',
+  'with',
+  'the',
+  'is',
+  'are',
+  'Hub',
+  'Switch',
+  'Gateway',
+  'Media',
+  'Ramsar',
+  'Site',
+  'Aditya-L1',
+  'Narration',
+  'Indian',
+  'Post',
+  'Office',
+  'Act',
+  'Unified',
+  'Payments',
+  'Interface',
+  'Mobile',
+  'Application',
+  'New-age',
+  'Governance',
+  'Universal',
+  'Management',
+  'National',
+  'Access',
+  'New',
+  'Network',
+  'Government',
+]);
+
+function isExplicitNonMalayalamToken(token: string): boolean {
+  const trimmed = token.trim();
+  if (!trimmed) return true;
+  if (/[\u0D00-\u0D7F]/.test(trimmed)) return true;
+  if (/^[\d.,:;!?()[\]{}+\-*/%=<>°'"`–—_]+$/.test(trimmed)) return true;
+  if (/^\(?[A-Da-d][).:]$/.test(trimmed)) return true;
+  if (/^(?:i|ii|iii|iv|v)\.?$/i.test(trimmed)) return true;
+  if (/^[P-S]\.?$/.test(trimmed)) return true;
+  if (/^[xXyYnN]$/.test(trimmed)) return true;
+  if (/^\d+(?:\.\d+)?%?$/.test(trimmed)) return true;
+  if (/^\d+°C$/i.test(trimmed)) return true;
+
+  const bare = trimmed.replace(/^[("'«]+|[)"'».,:;!?]+$/g, '');
+  if (ENGLISH_KEEP_WORDS.has(bare)) return true;
+  if (/^\([A-Za-z0-9\- ]+\)$/.test(trimmed)) return true;
+
+  return false;
+}
+
 export function isShreeMalToken(token: string): boolean {
   const trimmed = token.trim();
-  if (!trimmed) return false;
-  if (/[\u0D00-\u0D7F]/.test(trimmed)) return false;
-  if (/^[\d.,:;!?()[\]{}+\-*/%=<>°'"`–—]+$/.test(trimmed)) return false;
-  if (/^\(?[A-Da-d][).:]$/.test(trimmed)) return false;
-  if (/^(?:i|ii|iii|iv|v)\.?$/i.test(trimmed)) return false;
+  if (isExplicitNonMalayalamToken(trimmed)) return false;
 
-  if (/[\u0080-\u00FF\u0152-\u017E\u0192\u2018-\u203A]/.test(trimmed)) return true;
+  if (/[\u0080-\u00FF\u0152-\u017E\u0192\u03BC\u2018-\u203A]/.test(trimmed)) return true;
   if (/[\[\]|~^}]/.test(trimmed)) return true;
   if (/[a-z][A-Z]/.test(trimmed) && /[LMOQRSVW]/.test(trimmed)) return true;
   if (/^[A-Za-z]{2,}V[.,?]?$/.test(trimmed)) return true;
-  if (/^(?:KqO|JfV|BqV|CfV|AfV|CT|DU|Bp]|B|oOÒV|k]Ð]¤|j]ÐV|fLRu|oOWt]¤)$/.test(trimmed)) {
+  if (
+    /^(?:INf|Zj|Z\.|Ry\.|o\}\.|yopU|KqO|JfV|BqV|CfV|AfV|CT|DU|Bp]|B|oOÒV|k]Ð]¤|j]ÐV|fLRu|oOWt]¤)[.,?]?$/.test(
+      trimmed
+    )
+  ) {
     return true;
   }
 
@@ -250,16 +331,31 @@ function convertSingleShreeMalWord(word: string): string {
 export function convertShreeMalToUnicode(text: string): string {
   return text
     .split('\n')
-    .map((line) =>
-      line
+    .map((line) => {
+      const tokens = line.split(/\s+/).filter(Boolean);
+      const shreeCount = tokens.filter((t) => isShreeMalToken(t)).length;
+      const isMalayalamLine = shreeCount >= 1;
+
+      return line
         .split(/(\s+)/)
         .map((segment) => {
           if (!segment || /^\s+$/.test(segment)) return segment;
-          if (!isShreeMalToken(segment)) return segment;
-          return convertSingleShreeMalWord(segment);
+          if (isExplicitNonMalayalamToken(segment)) return segment;
+          if (isShreeMalToken(segment)) {
+            return convertSingleShreeMalWord(segment);
+          }
+          if (isMalayalamLine) {
+            const bare = segment.replace(/^[("'«]+|[)"'».,:;!?]+$/g, '');
+            const looksLikeEnglishWord =
+              /^[A-Z][a-z]{3,}$/.test(bare) || /^[a-z]{4,}$/.test(bare);
+            if (!looksLikeEnglishWord) {
+              return convertSingleShreeMalWord(segment);
+            }
+          }
+          return segment;
         })
-        .join('')
-    )
+        .join('');
+    })
     .join('\n');
 }
 
