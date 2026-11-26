@@ -9,6 +9,7 @@ import {
   Languages,
   FolderOpen,
   BookOpen,
+  Upload,
 } from 'lucide-react';
 import { useExamStore } from '../../store/useExamStore';
 import {
@@ -27,6 +28,7 @@ import { PdfDropzone } from './PdfDropzone';
 import { FolderStatusBadge } from '../storage/FolderStatusBadge';
 import { ExamHeadDashboard } from '../examHead/ExamHeadDashboard';
 import { MockExamLauncher } from '../launcher/MockExamLauncher';
+import { ImportExamModal } from '../sharing/ImportExamModal';
 
 function formatLanguageLabel(lang: DetectedLanguage): string {
   switch (lang) {
@@ -72,6 +74,7 @@ export const LandingUpload: React.FC = () => {
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [launcherOpen, setLauncherOpen] = useState<boolean>(false);
   const [launcherHeadId, setLauncherHeadId] = useState<string | null>(null);
+  const [importModalOpen, setImportModalOpen] = useState<boolean>(false);
 
   const [ocrLanguage, setOcrLanguage] = useState<OcrLanguageOption>('mal+eng');
   const [forceOcr, setForceOcr] = useState<boolean>(false);
@@ -259,7 +262,17 @@ export const LandingUpload: React.FC = () => {
             <ShieldCheck className="h-3.5 w-3.5" />
             100% Client-Side • English &amp; Malayalam (മലയാളം)
           </div>
-          <FolderStatusBadge onStatusToast={showToast} />
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setImportModalOpen(true)}
+              className="inline-flex items-center gap-1.5 rounded-full border border-emerald-300 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-800 transition hover:bg-emerald-100"
+            >
+              <Upload className="h-3.5 w-3.5" />
+              Import Exam File
+            </button>
+            <FolderStatusBadge onStatusToast={showToast} />
+          </div>
         </div>
 
         <div className="text-center">
@@ -350,6 +363,7 @@ export const LandingUpload: React.FC = () => {
             showToast(`Upload a new PDF above to append to "${head.name}".`);
             window.scrollTo({ top: 0, behavior: 'smooth' });
           }}
+          onOpenImportModal={() => setImportModalOpen(true)}
         />
 
         <div className="mt-6 rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
@@ -527,6 +541,15 @@ export const LandingUpload: React.FC = () => {
           <span>Shortcuts: A–D / 1–4, Enter (Confirm), Arrow Keys</span>
         </div>
       </div>
+
+      <ImportExamModal
+        open={importModalOpen}
+        onClose={() => setImportModalOpen(false)}
+        onImportedAndLaunch={(headId) => {
+          setLauncherHeadId(headId);
+          setLauncherOpen(true);
+        }}
+      />
 
       <MockExamLauncher
         open={launcherOpen}
