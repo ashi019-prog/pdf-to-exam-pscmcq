@@ -9,6 +9,7 @@ import {
   Sigma,
   Lock,
   Save,
+  X,
 } from 'lucide-react';
 import { useExamStore } from '../../store/useExamStore';
 import { OPTION_KEYS, OptionKey, SavedExamPackage } from '../../types/exam';
@@ -16,7 +17,7 @@ import { OPTION_KEYS, OptionKey, SavedExamPackage } from '../../types/exam';
 const MATH_SYMBOLS = ['√', '²', '³', 'π', 'θ', '≤', '≥', '±', '×', '÷', '°'];
 
 interface ActiveFieldTarget {
-  questionNumber: number;
+  index: number;
   field: 'text' | OptionKey;
   element: HTMLTextAreaElement | HTMLInputElement;
 }
@@ -26,23 +27,55 @@ export const VerificationEditor: React.FC = () => {
     settings,
     questions,
     setPhase,
-    updateQuestion,
-    addBlankQuestion,
-    deleteQuestion,
+    updateQuestionAt,
+    addCustomQuestion,
+    deleteQuestionAt,
     startExam,
   } = useExamStore();
 
   const activeFieldRef = useRef<ActiveFieldTarget | null>(null);
   const [activeLabel, setActiveLabel] = useState<string>('Click any question or option field');
 
+  const [addModalOpen, setAddModalOpen] = useState(false);
+  const [newNumber, setNewNumber] = useState<string>('');
+  const [newText, setNewText] = useState<string>('');
+  const [newOptions, setNewOptions] = useState<Record<OptionKey, string>>({
+    A: '',
+    B: '',
+    C: '',
+    D: '',
+  });
+  const [newAnswer, setNewAnswer] = useState<OptionKey>('A');
+
   const totalWarnings = questions.reduce((sum, q) => sum + q.warnings.length, 0);
   const questionsWithWarnings = questions.filter((q) => q.warnings.length > 0).length;
+
+  const openAddModal = () => {
+    const maxNum = questions.reduce((max, q) => Math.max(max, q.number), 0);
+    setNewNumber(String(maxNum + 1));
+    setNewText('');
+    setNewOptions({ A: '', B: '', C: '', D: '' });
+    setNewAnswer('A');
+    setAddModalOpen(true);
+  };
+
+  const handleSaveNewQuestion = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newText.trim()) return;
+    addCustomQuestion({
+      number: parseInt(newNumber, 10) || undefined,
+      text: newText,
+      options: newOptions,
+      correctOption: newAnswer,
+    });
+    setAddModalOpen(false);
+  };
 
   const insertMathSymbol = (symbol: string) => {
     const target = activeFieldRef.current;
     if (!target) return;
 
-    const q = questions.find((item) => item.number === target.questionNumber);
+    const q = questions[target.index];
     if (!q) return;
 
     const el = target.element;
@@ -52,9 +85,9 @@ export const VerificationEditor: React.FC = () => {
     const nextValue = currentValue.slice(0, start) + symbol + currentValue.slice(end);
 
     if (target.field === 'text') {
-      updateQuestion(q.number, { text: nextValue });
+      updateQuestionAt(target.index, { text: nextValue });
     } else {
-      updateQuestion(q.number, {
+      updateQuestionAt(target.index, {
         options: { ...q.options, [target.field]: nextValue },
       });
     }
@@ -128,7 +161,7 @@ export const VerificationEditor: React.FC = () => {
             </button>
             <button
               type="button"
-              onClick={addBlankQuestion}
+              onClick={openAddModal}
               className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
             >
               <Plus className="h-4 w-4" />
@@ -197,11 +230,11 @@ export const VerificationEditor: React.FC = () => {
         )}
 
         <div className="space-y-4">
-          {questions.map((q) => {
+          {questions.map((q, index) => {
             const hasWarnings = q.warnings.length > 0;
             return (
               <div
-                key={q.number}
+                key={`${index}-${q.number}`}
                 className={`rounded-xl border bg-white p-5 shadow-sm transition ${
                   hasWarnings ? 'border-amber-300 ring-1 ring-amber-200' : 'border-slate-200'
                 }`}
@@ -222,7 +255,7 @@ export const VerificationEditor: React.FC = () => {
                     ))}
                   </div>
 
-                  <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-2.5">
                     {q.correctOption ? (
                       <span
                         className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-800"
@@ -233,17 +266,17 @@ export const VerificationEditor: React.FC = () => {
                       </span>
                     ) : (
                       <label className="flex items-center gap-2 text-xs font-medium text-amber-800">
-                        Set Missing Key:
+                        Set Answer:
                         <select
                           value=""
                           onChange={(e) =>
-                            updateQuestion(q.number, {
+                            updateQuestionAt(index, {
                               correctOption: (e.target.value || null) as OptionKey | null,
                             })
                           }
                           className="rounded-md border border-amber-300 bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-900 focus:outline-none focus:ring-2 focus:ring-amber-200"
                         >
-                          <option value="">Unmatched</option>
+                          <option value="">Select</option>
                           {OPTION_KEYS.map((key) => (
                             <option key={key} value={key}>
                               Option {key}
@@ -255,11 +288,12 @@ export const VerificationEditor: React.FC = () => {
 
                     <button
                       type="button"
-                      onClick={() => deleteQuestion(q.number)}
-                      title="Delete question"
-                      className="rounded-md p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600"
+                      onClick={() => deleteQuestionAt(index)}
+                      title="Delete this question"
+                      className="inline-flex items-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1 text-xs font-semibold text-rose-700 hover:bg-rose-100"
                     >
-                      <Trash2 className="h-4 w-4" />
+                      <Trash2 className="h-3.5 w-3.5" />
+                      Delete
                     </button>
                   </div>
                 </div>
@@ -270,13 +304,13 @@ export const VerificationEditor: React.FC = () => {
                     value={q.text}
                     onFocus={(e) => {
                       activeFieldRef.current = {
-                        questionNumber: q.number,
+                        index,
                         field: 'text',
                         element: e.currentTarget,
                       };
                       setActiveLabel(`Editing Q${q.number} stem`);
                     }}
-                    onChange={(e) => updateQuestion(q.number, { text: e.target.value })}
+                    onChange={(e) => updateQuestionAt(index, { text: e.target.value })}
                     placeholder="Enter question text (line breaks and math symbols preserved)..."
                     className="w-full rounded-lg border border-slate-200 px-3 py-2 font-sans text-sm text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-100"
                   />
@@ -295,14 +329,14 @@ export const VerificationEditor: React.FC = () => {
                           value={q.options[key]}
                           onFocus={(e) => {
                             activeFieldRef.current = {
-                              questionNumber: q.number,
+                              index,
                               field: key,
                               element: e.currentTarget,
                             };
                             setActiveLabel(`Editing Q${q.number} Option ${key}`);
                           }}
                           onChange={(e) =>
-                            updateQuestion(q.number, {
+                            updateQuestionAt(index, {
                               options: { ...q.options, [key]: e.target.value },
                             })
                           }
@@ -322,6 +356,112 @@ export const VerificationEditor: React.FC = () => {
           })}
         </div>
       </main>
+
+      {addModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+        >
+          <form
+            onSubmit={handleSaveNewQuestion}
+            className="w-full max-w-xl rounded-2xl border border-slate-200 bg-white p-6 shadow-xl"
+          >
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <h2 className="text-base font-bold text-slate-900">Add Question Manually</h2>
+              <button
+                type="button"
+                onClick={() => setAddModalOpen(false)}
+                className="rounded-md p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="mt-4 space-y-3">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600">
+                    Question Number
+                  </label>
+                  <input
+                    type="number"
+                    min={1}
+                    value={newNumber}
+                    onChange={(e) => setNewNumber(e.target.value)}
+                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-1.5 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600">
+                    Correct Answer
+                  </label>
+                  <select
+                    value={newAnswer}
+                    onChange={(e) => setNewAnswer(e.target.value as OptionKey)}
+                    className="mt-1 w-full rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-1.5 text-sm font-semibold text-emerald-900 focus:border-emerald-500 focus:outline-none"
+                  >
+                    {OPTION_KEYS.map((key) => (
+                      <option key={key} value={key}>
+                        Option {key}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-600">Question Text</label>
+                <textarea
+                  rows={3}
+                  required
+                  value={newText}
+                  onChange={(e) => setNewText(e.target.value)}
+                  placeholder="Type or paste the question here..."
+                  className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none"
+                />
+              </div>
+
+              <div className="grid gap-2.5 sm:grid-cols-2">
+                {OPTION_KEYS.map((key) => (
+                  <div key={key}>
+                    <label className="block text-xs font-semibold text-slate-600">
+                      Option {key}
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={newOptions[key]}
+                      onChange={(e) =>
+                        setNewOptions((prev) => ({ ...prev, [key]: e.target.value }))
+                      }
+                      placeholder={`Enter option ${key}...`}
+                      className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-1.5 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none"
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="mt-5 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setAddModalOpen(false)}
+                className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-4 py-2 text-xs font-semibold text-white hover:bg-indigo-700"
+              >
+                <Plus className="h-4 w-4" />
+                Add Question
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
     </div>
   );
 };
