@@ -34,6 +34,7 @@ export interface PdfExtractionProgress {
 export interface PdfExtractionOptions {
   ocrLanguage?: OcrLanguageOption;
   forceOcr?: boolean;
+  isAnswerKey?: boolean;
 }
 
 export interface PdfTextExtractionResult {
@@ -151,6 +152,28 @@ export function classifyPageTextEncoding(text: string): PageEncodingKind {
     return 'unicode_or_english';
   }
 
+  // Detect missing-glyph Malayalam CID PDFs (e.g. Kartika without ToUnicode CMap where only 1., (A)-(D), numbers decode)
+  const optionMarkerCount = (text.match(/(?:^|[\s\n])(?:\([A-D]\)|[A-D]\))(?=[\s\n]|$)/g) ?? []).length;
+  const englishWords = (text.match(/\b[A-Za-z]{3,}\b/g) ?? []).filter(
+    (w) => !/^(?:iii|iv|vi|vii|viii|ix|xi|xii|pto)$/i.test(w)
+  );
+  if (optionMarkerCount >= 4 && unicodeMalCount < 10 && englishWords.length < optionMarkerCount * 1.5) {
+    return 'unsupported_legacy_font';
+  }
+
+  // Detect ASCII-mapped legacy Malayalam fonts (e.g. ML-TTKarthika, FMBindumathi: "tIcf", "kv{Xo", "IpSn")
+  const legacyAsciiSignals =
+    (text.match(/[a-z][A-Z]/g) ?? []).length +
+    (text.match(/[A-Za-z][{}\[\]\\|^~`][A-Za-z]/g) ?? []).length;
+  if (unicodeMalCount < 10 && legacyAsciiSignals >= 8) {
+    const testLegacySample = convertShreeMalToUnicode(text.slice(0, 2000));
+    const malLegacyAfter = (testLegacySample.match(/[\u0D00-\u0D7F]/g) ?? []).length;
+    if (malLegacyAfter >= 20) {
+      return 'shree_mal';
+    }
+    return 'unsupported_legacy_font';
+  }
+
   if (garbledRatio < 0.04 && midWordSymbols < 4 && latinExtCount < 5) {
     return 'unicode_or_english';
   }
@@ -177,11 +200,16 @@ export function isLikelyLegacyNonUnicodeFont(text: string): boolean {
   return kind === 'shree_mal' || kind === 'unsupported_legacy_font';
 }
 
+/**
+ * Detects the Question Booklet Alpha Code (A, B, C, or D) from Page 1 (and page headers/footers)
+ * of a Kerala PSC / MCQ Question Paper PDF.
+ */
 export function detectBookletAlphaCodeFromPage1(
   rawItems: RawPdfTextItem[],
   pageHeight: number,
   rawDigitalText: string
 ): OptionKey | undefined {
+  // 1. Check explicit English/Malayalam label on Page 1
   const labelMatch = rawDigitalText.match(
     /(?:question\s+booklet\s+alpha\s+code|booklet\s+alpha\s+code|alpha\s+code|booklet\s+code|ചോദ്യ\s*പുസ്തക\s*അക്ഷര\s*കോഡ്)\s*[:\-]?\s*\(?([A-D])\)?/i
   );
@@ -189,6 +217,7 @@ export function detectBookletAlphaCodeFromPage1(
     return labelMatch[1].toUpperCase() as OptionKey;
   }
 
+  // 2. Look for the large standalone A/B/C/D box in the top 45% of Page 1 (standard Kerala PSC cover)
   let bestCandidate: { code: OptionKey; fontSize: number } | null = null;
   for (const item of rawItems) {
     const str = (item.str ?? '').trim();
@@ -208,6 +237,7 @@ export function detectBookletAlphaCodeFromPage1(
     return bestCandidate.code;
   }
 
+  // 3. Fallback: header/footer code like "092/2026-M 2 A" or "94/26-M A"
   const headerMatch = rawDigitalText.match(
     /(?:^|\n)\s*\d{1,4}\/\d{2,4}-[A-Z](?:\s+\d{1,3})?\s+([A-D])(?:\s|$)/im
   );
@@ -386,8 +416,7 @@ function mergeCleanDigitalAndOcrWords(
       const yOverlap = Math.min(w.bbox.y1, d.bbox.y1) - Math.max(w.bbox.y0, d.bbox.y0);
       if (yOverlap < Math.min(wHeight, d.bbox.y1 - d.bbox.y0) * 0.25) continue;
 
-      const xOverlap =
-        Math.min(w.bbox.x1 + 2 * scale, d.bbox.x1 + 2 * scale) -
+      const xOverlap = Math.min(w.bbox.x1 + 2 * scale, d.bbox.x1 + 2 * scale) -
         Math.max(w.bbox.x0 - 2 * scale, d.bbox.x0 - 2 * scale);
       if (xOverlap > 0) {
         coveredX += xOverlap;
@@ -415,6 +444,12 @@ function mergeCleanDigitalAndOcrWords(
   return joinOcrWordsInReadingOrder([...digitalBoxes, ...keptOcr], scale);
 }
 
+/**
+ * Hybrid PDF + OCR page reconstructor:
+ * 1. Uses exact PDF vector coordinates for question numbers (1.–100.) and options ((A)–(D) / A)–D)).
+ * 2. Preserves ALL clean digital tokens from English/Number/Roman fonts directly from the PDF text layer.
+ * 3. Uses Tesseract Malayalam OCR strictly for the non-Unicode Malayalam words in each slot.
+ */
 function reconstructOcrPageWithPdfAnchors(
   rawItems: RawPdfTextItem[],
   pageHeight: number,
@@ -554,7 +589,6 @@ function reconstructOcrPageWithPdfAnchors(
   qAnchors.sort((a, b) => a.pyTop - b.pyTop);
   const footerLimitPx = (pageHeight - 52) * scale;
   const outputBlocks: string[] = [];
-  const mergedDigitalBoxes = collapseStackedFractionBoxes(cleanDigitalBoxes, scale);
 
   for (let i = 0; i < qAnchors.length; i += 1) {
     const q = qAnchors[i];
@@ -632,6 +666,7 @@ function reconstructOcrPageWithPdfAnchors(
       }
     };
 
+    const mergedDigitalBoxes = collapseStackedFractionBoxes(cleanDigitalBoxes, scale);
     for (const d of mergedDigitalBoxes) {
       assignBox(d, stemDigital, optionDigital, false);
     }
@@ -761,7 +796,6 @@ function sortColumnLines(items: PositionedTextItem[]): string {
         .map((p) => p.text)
         .join(' ')
         .replace(/[ \t]+/g, ' ')
-        .replace(/\s+([,;:?])/g, '$1')
         .trim()
     )
     .join('\n');
@@ -911,7 +945,7 @@ function extractQuestionTablesFromPage(
       const hWords = regionLines[headerIdx].words;
       let maxGap = 0;
       let splitWordIdx = -1;
-      for (let k = 1; k < hWords.length; k += 1) {
+    for (let k = 1; k < hWords.length; k += 1) {
         const gap = hWords[k].x - hWords[k - 1].endX;
         if (gap > maxGap) {
           maxGap = gap;
@@ -1148,6 +1182,7 @@ export async function extractTextFromPdf(
 ): Promise<PdfTextExtractionResult> {
   const ocrLanguage: OcrLanguageOption = options.ocrLanguage ?? 'mal+eng';
   const forceOcr = options.forceOcr ?? false;
+  const isAnswerKey = options.isAnswerKey ?? false;
 
   const arrayBuffer = await file.arrayBuffer();
   const loadingTask = pdfjsLib.getDocument({ data: new Uint8Array(arrayBuffer) });
@@ -1191,7 +1226,7 @@ export async function extractTextFromPdf(
         pageResults.push({ pageNum, text: '', needsOcr: false });
         continue;
       }
-      if (pageNum <= 2 && isDigitalInstructionsOnlyPage(rawDigital)) {
+      if (!isAnswerKey && pageNum <= 2 && isDigitalInstructionsOnlyPage(rawDigital)) {
         pageResults.push({ pageNum, text: '', needsOcr: false });
         continue;
       }
@@ -1242,7 +1277,7 @@ export async function extractTextFromPdf(
         } else {
           pageResults.push({
             pageNum,
-            text: stripPageHeadersAndFooters(rawDigital),
+            text: isAnswerKey ? rawDigital : stripPageHeadersAndFooters(rawDigital),
             needsOcr: false,
           });
         }
@@ -1250,7 +1285,7 @@ export async function extractTextFromPdf(
     } else {
       if (isBlankOrRoughWorkPage(rawDigital)) {
         pageResults.push({ pageNum, text: '', needsOcr: false });
-      } else if (pageNum <= 2 && isDigitalInstructionsOnlyPage(rawDigital)) {
+      } else if (!isAnswerKey && pageNum <= 2 && isDigitalInstructionsOnlyPage(rawDigital)) {
         pageResults.push({ pageNum, text: '', needsOcr: false });
       } else {
         if (typeof document !== 'undefined') {
@@ -1335,7 +1370,9 @@ export async function extractTextFromPdf(
               )
             : null;
 
-        entry.text = anchoredText
+        entry.text = isAnswerKey
+          ? data.text
+          : anchoredText
           ? anchoredText
           : cleanOcrMalayalamText(stripPageHeadersAndFooters(data.text));
 
@@ -1489,7 +1526,7 @@ export function parseQuestionsFromText(
   if (!cleanedRaw) return [];
 
   const questionStartRegex =
-    /(?:^|\n)\s*(?:(?:Q(?:uestion)?|ചോദ്യം)\.?\s*)?(\d{1,3})\s*[.):\-](?=\s*[^\d\n])/gi;
+    /(?:^|\n)\s*(?:(?:Q(?:uestion)?|ചോദ്യം)\.?\s*)?(\d{1,3})\s*[.):\-](?=\s+\S|\n)/gi;
 
   interface RawMarker {
     number: number;
@@ -1533,9 +1570,19 @@ export function parseQuestionsFromText(
 
   for (let i = firstMcqMarkerIdx + 1; i < allMarkers.length; i += 1) {
     const candidate = allMarkers[i];
-    if (candidate.number > lastQuestionNum && candidate.number <= lastQuestionNum + 25) {
+    if (candidate.number === lastQuestionNum + 1) {
       questionMarkers.push(candidate);
       lastQuestionNum = candidate.number;
+    } else if (candidate.number > lastQuestionNum + 1 && candidate.number <= lastQuestionNum + 15) {
+      const nextAfter = allMarkers[i + 1];
+      const snippet = cleanedRaw.slice(
+        candidate.contentStart,
+        nextAfter ? nextAfter.startIndex : cleanedRaw.length
+      );
+      if (findSequentialOptions(snippet).length >= 2) {
+        questionMarkers.push(candidate);
+        lastQuestionNum = candidate.number;
+      }
     }
   }
 
@@ -1684,6 +1731,13 @@ function parseSingleBookletAnswerKey(normalized: string): Record<number, OptionK
   return keyMap;
 }
 
+/**
+ * Parses both single-booklet and 4-booklet (A, B, C, D) Kerala PSC Answer Key PDFs:
+ * - Format 1: Tabular columns "Q.No  A  B  C  D" (including 2 side-by-side blocks per row)
+ * - Format 2: 8-column paired rows "1 B  1 C  1 A  1 D" under A / B / C / D headers
+ * - Format 3: Sectioned answer keys ("ALPHA CODE : A ... ALPHA CODE : B ...")
+ * - Format 4: Single-booklet answer key fallback
+ */
 export function parseMultiBookletAnswerKey(rawText: string): MultiBookletAnswerKeyResult {
   const normalized = normalizeMalayalamDigits(rawText)
     .replace(/\r\n/g, '\n')
@@ -1696,6 +1750,7 @@ export function parseMultiBookletAnswerKey(rawText: string): MultiBookletAnswerK
     D: {},
   };
 
+  // Strategy 1: 4-booklet tabular rows "<qNum> <ansA> <ansB> <ansC> <ansD>"
   const fourColRowRegex =
     /(?:^|[\s|])(\d{1,3})[.)]?\s+\(?([A-Da-dX*\-]|DEL(?:ETED)?)\)?\s+\(?([A-Da-dX*\-]|DEL(?:ETED)?)\)?\s+\(?([A-Da-dX*\-]|DEL(?:ETED)?)\)?\s+\(?([A-Da-dX*\-]|DEL(?:ETED)?)\)?(?=$|[\s|])/gi;
 
@@ -1724,6 +1779,7 @@ export function parseMultiBookletAnswerKey(rawText: string): MultiBookletAnswerK
     };
   }
 
+  // Strategy 2: 8-column paired rows "1 B 1 C 1 A 1 D" (4 booklets side-by-side with repeated Q.No)
   const paired4Regex =
     /(?:^|\n)\s*(\d{1,3})[.)]?\s+\(?([A-Da-dX*\-])\)?\s+(\d{1,3})[.)]?\s+\(?([A-Da-dX*\-])\)?\s+(\d{1,3})[.)]?\s+\(?([A-Da-dX*\-])\)?\s+(\d{1,3})[.)]?\s+\(?([A-Da-dX*\-])\)?\s*(?=$|\n)/gi;
 
@@ -1757,6 +1813,7 @@ export function parseMultiBookletAnswerKey(rawText: string): MultiBookletAnswerK
     };
   }
 
+  // Strategy 3: Sectioned multi-booklet key ("ALPHA CODE : A ... ALPHA CODE : B ...")
   const sectionRegex =
     /(?:question\s+booklet\s+)?(?:alpha\s+code|booklet\s+code|series|set|ചോദ്യ\s*പുസ്തക\s*അക്ഷര\s*കോഡ്)\s*[:\-]?\s*\(?([A-D])\)?/gi;
   const sectionStarts: Array<{ code: OptionKey; index: number; bodyStart: number }> = [];
@@ -1798,6 +1855,7 @@ export function parseMultiBookletAnswerKey(rawText: string): MultiBookletAnswerK
     }
   }
 
+  // Strategy 4: Standard single-booklet answer key
   const single = parseSingleBookletAnswerKey(normalized);
   return {
     byBooklet: {},
@@ -1834,4 +1892,4 @@ export function mergeQuestionsWithAnswerKey(
       warnings: computeQuestionWarnings(q.text, q.options, matched, q.ocrConfidence),
     };
   });
-}
+}  
