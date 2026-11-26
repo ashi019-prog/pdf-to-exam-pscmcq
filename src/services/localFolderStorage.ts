@@ -9,7 +9,7 @@ export interface ImportedPaperMeta {
 
 export interface ExamHeadQuestion {
   id: string;
-  number: number; // Sequential across the entire Exam Head (1..N)
+  number: number;
   paperId: string;
   paperLabel: string;
   text: string;
@@ -27,7 +27,7 @@ export interface ExamHeadQuestion {
 
 export interface ExamHeadFile {
   id: string;
-  title: string; // e.g., "Village Assistant"
+  title: string;
   createdAt: string;
   updatedAt: string;
   importedPapers: ImportedPaperMeta[];
@@ -365,6 +365,47 @@ class LocalStorageEngine {
     }
 
     return idbGetAll<ExamHeadFile>(STORE_EXAM_HEADS);
+  }
+
+  public async readExamHeadRaw(examHeadSlug: string): Promise<unknown | null> {
+    if (this.status === 'connected' && this.rootHandle) {
+      const { examHeadsDir } = await this.ensureSubfolders(this.rootHandle);
+      return this.readJsonFile<unknown>(examHeadsDir, `${examHeadSlug}.json`);
+    }
+    const stored = await idbGet<unknown>(STORE_EXAM_HEADS, examHeadSlug);
+    return stored ?? null;
+  }
+
+  public async writeExamHeadRaw(examHeadSlug: string, data: unknown): Promise<void> {
+    if (this.status === 'connected' && this.rootHandle) {
+      const { examHeadsDir } = await this.ensureSubfolders(this.rootHandle);
+      await this.writeJsonFile(examHeadsDir, `${examHeadSlug}.json`, data);
+    } else {
+      await idbSet(STORE_EXAM_HEADS, examHeadSlug, data);
+    }
+    this.notify();
+  }
+
+  public async listExamHeadsRaw(): Promise<unknown[]> {
+    if (this.status === 'connected' && this.rootHandle) {
+      const { examHeadsDir } = await this.ensureSubfolders(this.rootHandle);
+      const results: unknown[] = [];
+      for await (const entry of examHeadsDir.values()) {
+        if (entry.kind === 'file' && entry.name.toLowerCase().endsWith('.json')) {
+          try {
+            const file = await entry.getFile();
+            const parsed = JSON.parse(await file.text()) as unknown;
+            if (parsed && typeof parsed === 'object') {
+              results.push(parsed);
+            }
+          } catch {
+            // Skip malformed JSON files
+          }
+        }
+      }
+      return results;
+    }
+    return idbGetAll<unknown>(STORE_EXAM_HEADS);
   }
 
   public async getExamHead(examHeadSlug: string): Promise<ExamHeadFile | null> {
