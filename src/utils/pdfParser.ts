@@ -148,7 +148,7 @@ export function normalizeOptionKey(raw: string): OptionKey | null {
 
   if (stripped === 'അ' || stripped === 'എ' || stripped === 'ക') return 'A';
   if (stripped === 'ആ' || stripped === 'ബി' || stripped === '8') return 'B';
-  if (stripped === 'ഇ' || stripped === 'സി' || stripped === '0' || stripped === 'O') return 'C';
+  if (stripped === 'ഇ' || stripped === 'സി' || stripped === '0' || stripped === 'O' || stripped === 'ധ') return 'C';
   if (stripped === 'ഈ' || stripped === 'ഡി') return 'D';
 
   const cleaned = stripped.toUpperCase().replace(/[^A-D1-4]/g, '');
@@ -441,7 +441,7 @@ const OPTION_LABEL_SETS: Array<Record<OptionKey, string[]>> = [
   {
     A: ['A', 'a', 'ക', '4', 'Ä'],
     B: ['B', 'b', '8', 'ß'],
-    C: ['C', 'c', '0', 'O', '©'],
+    C: ['C', 'c', 'ധ', '0', 'O', '©'],
     D: ['D', 'd', '0', 'O'],
   },
   {
