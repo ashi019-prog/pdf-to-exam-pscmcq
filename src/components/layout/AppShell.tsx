@@ -299,15 +299,6 @@ export const AppShell: React.FC = () => {
             );
           })}
         </nav>
-
-        <div className="border-t border-slate-100 p-4 text-[11px] text-slate-500">
-          <p className="font-semibold text-slate-700">Scoring Rules</p>
-          <p className="mt-1">
-            <span className="font-semibold text-emerald-600">+1</span> Correct •{' '}
-            <span className="font-semibold text-rose-600">-0.33</span> Wrong •{' '}
-            <span className="font-semibold text-slate-600">0</span> Skipped
-          </p>
-        </div>
       </aside>
 
       <div className="flex min-h-screen flex-col pb-20 lg:pb-0 lg:pl-60">
