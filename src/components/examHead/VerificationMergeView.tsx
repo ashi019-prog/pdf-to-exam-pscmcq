@@ -23,21 +23,35 @@ import { localFolderStorage } from '../../services/localFolderStorage';
 interface VerificationMergeViewProps {
   initialQuestions: ExamQuestion[];
   defaultPaperLabel: string;
+  initialExamHeadId?: string;
+  initialCreatingNew?: boolean;
+  initialNewHeadName?: string;
   onMerged: (examHead: ExamHead, addedCount: number) => void;
   onCancel?: () => void;
+}
+
+const MATH_SYMBOLS = ['×', '÷', '±', '√', '²', '³', 'π', '≤', '≥', '≠', '°', '₹', '½', '¼', '¾', '/'];
+
+interface FocusedField {
+  tempId: string;
+  field: 'text' | OptionKey;
 }
 
 export const VerificationMergeView: React.FC<VerificationMergeViewProps> = ({
   initialQuestions,
   defaultPaperLabel,
+  initialExamHeadId,
+  initialCreatingNew,
+  initialNewHeadName,
   onMerged,
   onCancel,
 }) => {
   const [examHeads, setExamHeads] = useState<ExamHead[]>([]);
-  const [selectedHeadId, setSelectedHeadId] = useState<string>('');
-  const [creatingNew, setCreatingNew] = useState<boolean>(false);
-  const [newHeadName, setNewHeadName] = useState<string>('');
+  const [selectedHeadId, setSelectedHeadId] = useState<string>(initialExamHeadId ?? '');
+  const [creatingNew, setCreatingNew] = useState<boolean>(Boolean(initialCreatingNew));
+  const [newHeadName, setNewHeadName] = useState<string>(initialNewHeadName ?? '');
   const [paperLabel, setPaperLabel] = useState<string>(defaultPaperLabel);
+  const [focusedField, setFocusedField] = useState<FocusedField | null>(null);
 
   const [incoming, setIncoming] = useState<IncomingVerifiedQuestion[]>(() =>
     initialQuestions.map((q, idx) => ({
@@ -59,7 +73,13 @@ export const VerificationMergeView: React.FC<VerificationMergeViewProps> = ({
   const loadHeads = async () => {
     const list = await listExamHeads();
     setExamHeads(list);
-    if (list.length > 0 && !selectedHeadId) {
+    if (initialCreatingNew) {
+      setCreatingNew(true);
+      return;
+    }
+    if (initialExamHeadId && list.some((h) => h.id === initialExamHeadId)) {
+      setSelectedHeadId(initialExamHeadId);
+    } else if (list.length > 0 && !selectedHeadId) {
       setSelectedHeadId(list[0].id);
     } else if (list.length === 0) {
       setCreatingNew(true);
@@ -122,6 +142,26 @@ export const VerificationMergeView: React.FC<VerificationMergeViewProps> = ({
             }
           : q
       )
+    );
+  };
+
+  const handleInsertSymbol = (symbol: string) => {
+    if (!focusedField) return;
+    setIncoming((prev) =>
+      prev.map((q) => {
+        if (q.tempId !== focusedField.tempId) return q;
+        if (focusedField.field === 'text') {
+          return { ...q, text: `${q.text}${symbol}` };
+        }
+        const key = focusedField.field;
+        return {
+          ...q,
+          options: {
+            ...q.options,
+            [key]: `${q.options[key]}${symbol}`,
+          },
+        };
+      })
     );
   };
 
@@ -268,7 +308,7 @@ export const VerificationMergeView: React.FC<VerificationMergeViewProps> = ({
               type="text"
               value={paperLabel}
               onChange={(e) => setPaperLabel(e.target.value)}
-              placeholder="e.g., 2024 Paper 2"
+              placeholder="e.g., 2024 Prelims Set A"
               className="mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none"
             />
           </div>
@@ -297,6 +337,28 @@ export const VerificationMergeView: React.FC<VerificationMergeViewProps> = ({
               Remove All Flagged Duplicates ({activeFlaggedIds.length})
             </button>
           )}
+        </div>
+
+        <div className="mt-3 flex flex-wrap items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2">
+          <span className="mr-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+            Math Symbols:
+          </span>
+          {MATH_SYMBOLS.map((sym) => (
+            <button
+              key={sym}
+              type="button"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => handleInsertSymbol(sym)}
+              title={
+                focusedField
+                  ? `Insert ${sym}`
+                  : 'Click inside any question or option field first'
+              }
+              className="rounded-md border border-slate-200 bg-slate-50 px-2 py-0.5 text-xs font-semibold text-slate-700 hover:border-indigo-300 hover:bg-indigo-50 hover:text-indigo-700"
+            >
+              {sym}
+            </button>
+          ))}
         </div>
 
         {error && (
@@ -453,6 +515,7 @@ export const VerificationMergeView: React.FC<VerificationMergeViewProps> = ({
               <textarea
                 rows={2}
                 value={q.text}
+                onFocus={() => setFocusedField({ tempId: q.tempId, field: 'text' })}
                 onChange={(e) => handleUpdateIncoming(q.tempId, { text: e.target.value })}
                 className="mt-3 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none"
               />
@@ -466,6 +529,7 @@ export const VerificationMergeView: React.FC<VerificationMergeViewProps> = ({
                     <input
                       type="text"
                       value={q.options[key]}
+                      onFocus={() => setFocusedField({ tempId: q.tempId, field: key })}
                       onChange={(e) =>
                         handleUpdateIncoming(q.tempId, {
                           options: { ...q.options, [key]: e.target.value },
