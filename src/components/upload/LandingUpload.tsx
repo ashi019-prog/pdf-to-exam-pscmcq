@@ -8,18 +8,20 @@ import {
   History,
   Languages,
   FolderOpen,
+  BookOpen,
 } from 'lucide-react';
 import { useExamStore } from '../../store/useExamStore';
 import {
   DetectedLanguage,
   extractTextFromPdf,
   mergeQuestionsWithAnswerKey,
+  MultiBookletAnswerKeyResult,
   OcrLanguageOption,
-  parseAnswerKeyFromText,
+  parseMultiBookletAnswerKey,
   parseQuestionsFromText,
   PdfExtractionProgress,
 } from '../../utils/pdfParser';
-import { ExamQuestion, OptionKey, SavedExamPackage } from '../../types/exam';
+import { ExamQuestion, OPTION_KEYS, OptionKey, SavedExamPackage } from '../../types/exam';
 import { formatDurationReadable } from '../../utils/scoring';
 import { PdfDropzone } from './PdfDropzone';
 
@@ -34,6 +36,20 @@ function formatLanguageLabel(lang: DetectedLanguage): string {
     default:
       return 'Unknown';
   }
+}
+
+function selectAnswerKeyForBooklet(
+  multiKey: MultiBookletAnswerKeyResult | null,
+  bookletCode: OptionKey
+): Record<number, OptionKey> {
+  if (!multiKey) return {};
+  if (multiKey.isMultiBooklet) {
+    const matched = multiKey.byBooklet[bookletCode];
+    if (matched && Object.keys(matched).length > 0) {
+      return matched;
+    }
+  }
+  return multiKey.fallbackSingleKey;
 }
 
 export const LandingUpload: React.FC = () => {
@@ -53,6 +69,8 @@ export const LandingUpload: React.FC = () => {
 
   const [ocrLanguage, setOcrLanguage] = useState<OcrLanguageOption>('mal+eng');
   const [forceOcr, setForceOcr] = useState<boolean>(false);
+  const [bookletCode, setBookletCode] = useState<OptionKey>('A');
+  const [autoDetectedBooklet, setAutoDetectedBooklet] = useState<OptionKey | null>(null);
 
   const [questionFileName, setQuestionFileName] = useState<string | null>(null);
   const [questionProgress, setQuestionProgress] = useState<PdfExtractionProgress | null>(null);
@@ -67,7 +85,29 @@ export const LandingUpload: React.FC = () => {
   const [isParsingKey, setIsParsingKey] = useState(false);
 
   const [parsedQuestions, setParsedQuestions] = useState<ExamQuestion[]>([]);
+  const [multiBookletKey, setMultiBookletKey] = useState<MultiBookletAnswerKeyResult | null>(null);
   const [parsedAnswerKey, setParsedAnswerKey] = useState<Record<number, OptionKey>>({});
+
+  const applyBookletCode = (
+    nextCode: OptionKey,
+    multiKeyOverride?: MultiBookletAnswerKeyResult | null
+  ) => {
+    setBookletCode(nextCode);
+    const activeMulti = multiKeyOverride !== undefined ? multiKeyOverride : multiBookletKey;
+    if (activeMulti) {
+      const selectedKey = selectAnswerKeyForBooklet(activeMulti, nextCode);
+      setParsedAnswerKey(selectedKey);
+      const count = Object.keys(selectedKey).length;
+      if (parsedQuestions.length > 0) {
+        setParsedQuestions((prev) => mergeQuestionsWithAnswerKey(prev, selectedKey));
+      }
+      if (activeMulti.isMultiBooklet) {
+        setKeyStatus(
+          `Matched ${count} answers for Booklet ${nextCode} (${activeMulti.detectedBooklets.join('/')} booklets detected).`
+        );
+      }
+    }
+  };
 
   const handleQuestionPdf = async (file: File) => {
     setQuestionFileName(file.name);
@@ -80,6 +120,26 @@ export const LandingUpload: React.FC = () => {
         ocrLanguage,
         forceOcr,
       });
+
+      const detectedCode = result.bookletAlphaCode ?? null;
+      const effectiveBooklet: OptionKey = detectedCode ?? bookletCode;
+      if (detectedCode) {
+        setAutoDetectedBooklet(detectedCode);
+        setBookletCode(detectedCode);
+      }
+
+      const activeKey = multiBookletKey
+        ? selectAnswerKeyForBooklet(multiBookletKey, effectiveBooklet)
+        : parsedAnswerKey;
+      if (multiBookletKey) {
+        setParsedAnswerKey(activeKey);
+        if (multiBookletKey.isMultiBooklet) {
+          setKeyStatus(
+            `Matched ${Object.keys(activeKey).length} answers for Booklet ${effectiveBooklet} (${multiBookletKey.detectedBooklets.join('/')} booklets detected).`
+          );
+        }
+      }
+
       const extracted = parseQuestionsFromText(
         result.text,
         result.averageOcrConfidence,
@@ -92,14 +152,15 @@ export const LandingUpload: React.FC = () => {
           'No structured MCQs were detected. Try enabling "Force OCR" for scanned or legacy Malayalam font PDFs.'
         );
       } else {
-        const merged = mergeQuestionsWithAnswerKey(extracted, parsedAnswerKey);
+        const merged = mergeQuestionsWithAnswerKey(extracted, activeKey);
         setParsedQuestions(merged);
         const langBadge = formatLanguageLabel(result.detectedLanguage);
+        const bookletBadge = detectedCode ? ` • Booklet Code: ${detectedCode}` : '';
         const ocrNote = result.usedOcr
           ? ` • OCR${result.averageOcrConfidence ? ` ~${result.averageOcrConfidence}%` : ''}`
           : '';
         setQuestionStatus(
-          `Extracted ${merged.length} questions • Detected: ${langBadge}${ocrNote}`
+          `Extracted ${merged.length} questions • Detected: ${langBadge}${bookletBadge}${ocrNote}`
         );
         if (settings.title === 'Untitled Solo Practice Exam') {
           updateSettings({ title: file.name.replace(/\.pdf$/i, '') });
@@ -124,7 +185,10 @@ export const LandingUpload: React.FC = () => {
         ocrLanguage,
         forceOcr,
       });
-      const keyMap = parseAnswerKeyFromText(result.text);
+      const multi = parseMultiBookletAnswerKey(result.text);
+      setMultiBookletKey(multi);
+
+      const keyMap = selectAnswerKeyForBooklet(multi, bookletCode);
       const count = Object.keys(keyMap).length;
 
       if (count === 0) {
@@ -135,7 +199,13 @@ export const LandingUpload: React.FC = () => {
           setParsedQuestions(mergeQuestionsWithAnswerKey(parsedQuestions, keyMap));
         }
         const ocrNote = result.usedOcr ? ' (via OCR)' : '';
-        setKeyStatus(`Matched ${count} answer key entries${ocrNote}.`);
+        if (multi.isMultiBooklet) {
+          setKeyStatus(
+            `Matched ${count} answers for Booklet ${bookletCode} (${multi.detectedBooklets.join('/')} booklets detected)${ocrNote}.`
+          );
+        } else {
+          setKeyStatus(`Matched ${count} answer key entries${ocrNote}.`);
+        }
       }
     } catch (err) {
       setKeyError(err instanceof Error ? err.message : 'Failed to parse Answer Key PDF.');
@@ -146,7 +216,7 @@ export const LandingUpload: React.FC = () => {
   };
 
   const handleLoadSavedExamFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+    const file = e.target.files ? e.target.files[0] : undefined;
     e.target.value = '';
     if (!file) return;
     setSavedExamError(null);
@@ -189,20 +259,39 @@ export const LandingUpload: React.FC = () => {
           </p>
         </div>
 
-        {/* Language & OCR Bar */}
+        {/* Language, Booklet Code & OCR Bar */}
         <div className="mt-6 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-indigo-100 bg-white px-4 py-3 shadow-sm">
-          <div className="flex items-center gap-2 text-xs font-semibold text-slate-700">
-            <Languages className="h-4 w-4 text-indigo-600" />
-            <span>PDF / OCR Language:</span>
-            <select
-              value={ocrLanguage}
-              onChange={(e) => setOcrLanguage(e.target.value as OcrLanguageOption)}
-              className="rounded-lg border border-slate-300 bg-slate-50 px-2.5 py-1 text-xs font-semibold text-slate-800 focus:border-indigo-500 focus:outline-none"
-            >
-              <option value="mal+eng">Auto: Malayalam + English (മലയാളം + Eng)</option>
-              <option value="mal">Malayalam Only (മലയാളം)</option>
-              <option value="eng">English Only</option>
-            </select>
+          <div className="flex flex-wrap items-center gap-4">
+            <div className="flex items-center gap-2 text-xs font-semibold text-slate-700">
+              <Languages className="h-4 w-4 text-indigo-600" />
+              <span>PDF / OCR Language:</span>
+              <select
+                value={ocrLanguage}
+                onChange={(e) => setOcrLanguage(e.target.value as OcrLanguageOption)}
+                className="rounded-lg border border-slate-300 bg-slate-50 px-2.5 py-1 text-xs font-semibold text-slate-800 focus:border-indigo-500 focus:outline-none"
+              >
+                <option value="mal+eng">Auto: Malayalam + English (മലയാളം + Eng)</option>
+                <option value="mal">Malayalam Only (മലയാളം)</option>
+                <option value="eng">English Only</option>
+              </select>
+            </div>
+
+            <div className="flex items-center gap-2 text-xs font-semibold text-slate-700">
+              <BookOpen className="h-4 w-4 text-indigo-600" />
+              <span>Booklet Code:</span>
+              <select
+                value={bookletCode}
+                onChange={(e) => applyBookletCode(e.target.value as OptionKey)}
+                className="rounded-lg border border-slate-300 bg-slate-50 px-2.5 py-1 text-xs font-bold text-indigo-700 focus:border-indigo-500 focus:outline-none"
+              >
+                {OPTION_KEYS.map((code) => (
+                  <option key={code} value={code}>
+                    {code}
+                    {autoDetectedBooklet === code ? ' (Auto-detected)' : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
 
           <label className="flex cursor-pointer items-center gap-2 text-xs font-medium text-slate-700">
@@ -212,7 +301,7 @@ export const LandingUpload: React.FC = () => {
               onChange={(e) => setForceOcr(e.target.checked)}
               className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
             />
-            <span>Force OCR (use if Malayalam PDF text looks garbled)</span>
+            <span>Force OCR</span>
           </label>
         </div>
 
@@ -220,7 +309,7 @@ export const LandingUpload: React.FC = () => {
         <div className="mt-5 grid gap-5 sm:grid-cols-2">
           <PdfDropzone
             title="1. Question Paper PDF"
-            subtitle="Automatically skips page 1–2 instructions and aligns A–D choices."
+            subtitle="Auto-detects Booklet Alpha Code (A/B/C/D) from Page 1 and skips instructions."
             fileName={questionFileName}
             statusMessage={questionStatus}
             progress={questionProgress}
@@ -230,7 +319,7 @@ export const LandingUpload: React.FC = () => {
           />
           <PdfDropzone
             title="2. Answer Key PDF"
-            subtitle="Answers stay hidden until the Result screen (no spoilers)."
+            subtitle="Supports 4-booklet (A/B/C/D) Kerala PSC keys; answers stay hidden until Results."
             fileName={keyFileName}
             statusMessage={keyStatus}
             progress={keyProgress}
