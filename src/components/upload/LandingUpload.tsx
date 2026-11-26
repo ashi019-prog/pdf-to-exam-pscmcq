@@ -80,7 +80,11 @@ export const LandingUpload: React.FC = () => {
         ocrLanguage,
         forceOcr,
       });
-      const extracted = parseQuestionsFromText(result.text, result.averageOcrConfidence);
+      const extracted = parseQuestionsFromText(
+        result.text,
+        result.averageOcrConfidence,
+        result.questionImages
+      );
 
       if (extracted.length === 0) {
         setQuestionError(
@@ -205,14 +209,14 @@ export const LandingUpload: React.FC = () => {
               onChange={(e) => setForceOcr(e.target.checked)}
               className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
             />
-            <span>Force OCR (use if Malayalam PDF text looks garbled)</span>
+            <span>Force OCR (use only for scanned image PDFs)</span>
           </label>
         </div>
 
         <div className="mt-5 grid gap-5 sm:grid-cols-2">
           <PdfDropzone
             title="1. Question Paper PDF"
-            subtitle="Automatically skips page 1–2 instructions and aligns A–D choices."
+            subtitle="Automatically skips page 1–2 instructions, aligns A–D choices, and keeps tables/math."
             fileName={questionFileName}
             statusMessage={questionStatus}
             progress={questionProgress}
