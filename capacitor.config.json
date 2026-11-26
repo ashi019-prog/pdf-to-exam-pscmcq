@@ -1,0 +1,6 @@
+{
+  "appId": "com.pscexamstudio.app",
+  "appName": "PSC Exam Studio",
+  "webDir": "dist",
+  "bundledWebRuntime": false
+}
