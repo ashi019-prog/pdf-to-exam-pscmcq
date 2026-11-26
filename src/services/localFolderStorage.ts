@@ -61,7 +61,6 @@ export interface StorageStatusSnapshot {
   supported: boolean;
 }
 
-// Self-contained File System Access API types so strict TS builds cleanly without extra @types packages
 interface WritableStreamLike {
   write: (data: string) => Promise<void>;
   close: () => Promise<void>;
@@ -85,6 +84,7 @@ interface DirectoryHandleLike {
   ) => Promise<DirectoryHandleLike>;
   getFileHandle: (name: string, options?: { create?: boolean }) => Promise<FileHandleLike>;
   values: () => AsyncIterableIterator<FileHandleLike | DirectoryHandleLike>;
+  removeEntry?: (name: string) => Promise<void>;
 }
 
 type CapacitorDirectory = 'DOCUMENTS' | 'DATA';
@@ -110,6 +110,10 @@ interface CapacitorFilesystemPlugin {
     data: string;
     encoding: 'utf8';
     recursive?: boolean;
+  }) => Promise<void>;
+  deleteFile?: (opts: {
+    path: string;
+    directory: CapacitorDirectory;
   }) => Promise<void>;
 }
 
@@ -190,6 +194,16 @@ async function idbSet<T>(storeName: string, key: string, value: T): Promise<void
     tx.objectStore(storeName).put(value, key);
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error ?? new Error('IndexedDB put failed.'));
+  });
+}
+
+async function idbDelete(storeName: string, key: string): Promise<void> {
+  const db = await openDatabase();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(storeName, 'readwrite');
+    tx.objectStore(storeName).delete(key);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error ?? new Error('IndexedDB delete failed.'));
   });
 }
 
@@ -504,7 +518,7 @@ class LocalStorageEngine {
               results.push(parsed);
             }
           } catch {
-            // Skip malformed JSON files without breaking the library
+            // Skip malformed JSON files
           }
         }
       }
@@ -535,6 +549,27 @@ class LocalStorageEngine {
       await this.writeJsonFile(examHeadsDir, `${examHeadSlug}.json`, data);
     } else {
       await idbSet(STORE_EXAM_HEADS, examHeadSlug, data);
+    }
+    this.notify();
+  }
+
+  public async deleteExamHead(examHeadSlug: string): Promise<void> {
+    const fs = getCapacitorFs();
+    if (fs) {
+      const dir = await this.ensureCapacitorFolders();
+      if (dir && fs.deleteFile) {
+        await fs
+          .deleteFile({ path: `${CAP_EXAM_HEADS_DIR}/${examHeadSlug}.json`, directory: dir })
+          .catch(() => {});
+      }
+      await idbDelete(STORE_EXAM_HEADS, examHeadSlug).catch(() => {});
+    } else if (this.status === 'connected' && this.rootHandle) {
+      const { examHeadsDir } = await this.ensureSubfolders(this.rootHandle);
+      if (examHeadsDir.removeEntry) {
+        await examHeadsDir.removeEntry(`${examHeadSlug}.json`).catch(() => {});
+      }
+    } else {
+      await idbDelete(STORE_EXAM_HEADS, examHeadSlug);
     }
     this.notify();
   }
