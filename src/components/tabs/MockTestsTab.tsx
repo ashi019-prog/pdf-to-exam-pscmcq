@@ -16,6 +16,7 @@ import {
 import { ExamResult, OPTION_KEYS, OptionKey } from '../../types/exam';
 import { ExamHead, PooledQuestion } from '../../types/examHead';
 import {
+  deleteExamHead,
   deleteQuestionFromExamHead,
   updateQuestionInExamHead,
 } from '../../services/examHeadManager';
@@ -52,6 +53,8 @@ export const MockTestsTab: React.FC<MockTestsTabProps> = ({
 }) => {
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [sortMode, setSortMode] = useState<SortMode>('recent');
+  const [confirmDeleteHeadId, setConfirmDeleteHeadId] = useState<string | null>(null);
+  const [deletingHeadId, setDeletingHeadId] = useState<string | null>(null);
 
   const [managingHeadId, setManagingHeadId] = useState<string | null>(null);
   const [poolSearch, setPoolSearch] = useState<string>('');
@@ -139,6 +142,20 @@ export const MockTestsTab: React.FC<MockTestsTabProps> = ({
       onDataChanged();
     } finally {
       setBusyId(null);
+    }
+  };
+
+  const handleDeleteExamHead = async (headId: string) => {
+    setDeletingHeadId(headId);
+    try {
+      await deleteExamHead(headId);
+      setConfirmDeleteHeadId(null);
+      if (managingHeadId === headId) {
+        setManagingHeadId(null);
+      }
+      onDataChanged();
+    } finally {
+      setDeletingHeadId(null);
     }
   };
 
@@ -339,6 +356,38 @@ export const MockTestsTab: React.FC<MockTestsTabProps> = ({
                       Manage
                     </button>
                   </div>
+
+                  {confirmDeleteHeadId === head.id ? (
+                    <div className="flex items-center justify-between gap-2 rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1.5 text-[11px]">
+                      <span className="font-semibold text-rose-800">Delete this Exam Head?</span>
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          disabled={deletingHeadId === head.id}
+                          onClick={() => void handleDeleteExamHead(head.id)}
+                          className="rounded-md bg-rose-600 px-2 py-0.5 font-semibold text-white hover:bg-rose-700 disabled:bg-rose-300"
+                        >
+                          {deletingHeadId === head.id ? 'Deleting...' : 'Confirm'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setConfirmDeleteHeadId(null)}
+                          className="rounded-md border border-slate-300 bg-white px-2 py-0.5 font-semibold text-slate-700 hover:bg-slate-50"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setConfirmDeleteHeadId(head.id)}
+                      className="inline-flex w-full items-center justify-center gap-1 rounded-lg border border-rose-100 bg-rose-50/50 px-2 py-1 text-[11px] font-semibold text-rose-700 hover:bg-rose-50"
+                    >
+                      <Trash2 className="h-3 w-3" />
+                      Remove Exam Head
+                    </button>
+                  )}
                 </div>
               </div>
             );
