@@ -11,10 +11,13 @@ import {
   Save,
   X,
   ListOrdered,
+  FolderPlus,
 } from 'lucide-react';
 import { useExamStore } from '../../store/useExamStore';
 import { OPTION_KEYS, OptionKey, SavedExamPackage } from '../../types/exam';
 import { autoFixMalayalamPaste } from '../../utils/shreeMalConverter';
+import { FolderStatusBadge } from '../storage/FolderStatusBadge';
+import { SaveToExamHeadDialog } from '../storage/SaveToExamHeadDialog';
 
 const MATH_SYMBOLS = ['√', '²', '³', 'π', 'θ', '≤', '≥', '±', '×', '÷', '°'];
 
@@ -40,6 +43,14 @@ export const VerificationEditor: React.FC = () => {
   const [activeLabel, setActiveLabel] = useState<string>('Click any question or option field');
 
   const [addModalOpen, setAddModalOpen] = useState(false);
+  const [saveBankOpen, setSaveBankOpen] = useState(false);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  const showToast = (msg: string) => {
+    setToastMessage(msg);
+    window.setTimeout(() => setToastMessage(null), 4000);
+  };
+
   const [newNumber, setNewNumber] = useState<string>('');
   const [newText, setNewText] = useState<string>('');
   const [newOptions, setNewOptions] = useState<Record<OptionKey, string>>({
@@ -183,6 +194,7 @@ export const VerificationEditor: React.FC = () => {
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
+            <FolderStatusBadge onStatusToast={showToast} />
             <button
               type="button"
               disabled={questions.length === 0}
@@ -192,6 +204,16 @@ export const VerificationEditor: React.FC = () => {
             >
               <ListOrdered className="h-4 w-4" />
               Renumber 1–{questions.length}
+            </button>
+            <button
+              type="button"
+              disabled={questions.length === 0}
+              onClick={() => setSaveBankOpen(true)}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-800 hover:bg-emerald-100 disabled:opacity-40"
+              title="Save or append these questions silently to a local Exam Head JSON file"
+            >
+              <FolderPlus className="h-4 w-4" />
+              Save to Exam Head
             </button>
             <button
               type="button"
@@ -367,7 +389,7 @@ export const VerificationEditor: React.FC = () => {
 
                 <div className="mt-3 grid gap-2.5 sm:grid-cols-2">
                   {OPTION_KEYS.map((key) => {
-                    const isEmpty = !q.options[key]?.trim();
+                    const isEmpty = !(q.options[key] && q.options[key].trim());
                     return (
                       <div key={key} className="flex items-center gap-2">
                         <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-slate-100 text-xs font-bold text-slate-700">
@@ -524,6 +546,20 @@ export const VerificationEditor: React.FC = () => {
               </button>
             </div>
           </form>
+        </div>
+      )}
+
+      <SaveToExamHeadDialog
+        open={saveBankOpen}
+        defaultPaperLabel={settings.title}
+        questions={questions}
+        onClose={() => setSaveBankOpen(false)}
+        onSaved={showToast}
+      />
+
+      {toastMessage && (
+        <div className="fixed bottom-5 right-5 z-50 rounded-xl border border-emerald-200 bg-emerald-700 px-4 py-2.5 text-xs font-semibold text-white shadow-lg">
+          {toastMessage}
         </div>
       )}
     </div>
