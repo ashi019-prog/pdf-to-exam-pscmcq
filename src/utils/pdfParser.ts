@@ -292,10 +292,78 @@ function joinOcrWordsInReadingOrder(words: OcrWordBox[], scale: number): string 
         .map((w) => w.text.trim())
         .join(' ')
         .replace(/[ \t]+/g, ' ')
+        .replace(/\s+([,;:?])/g, '$1')
         .trim()
     )
     .filter((l) => l.length > 0)
     .join('\n');
+}
+
+/**
+ * Detects vertically stacked mathematical fractions (e.g., 3 above 4, 5 above 6, 1 above √(μ∈))
+ * where the horizontal fraction bar is drawn as a vector line rather than a "/" text glyph,
+ * and collapses them into a single inline "numerator/denominator" token centered at the fraction bar.
+ */
+function collapseStackedFractionBoxes(boxes: OcrWordBox[], scale: number): OcrWordBox[] {
+  if (boxes.length < 2) return boxes;
+  const mathTokenRegex = /^[+-]?(?:\d+(?:\.\d+)?|[a-zA-Zπμ∈√²³()]{1,10})$/;
+  const sorted = [...boxes].sort((a, b) => a.bbox.y0 - b.bbox.y0 || a.bbox.x0 - b.bbox.x0);
+  const used = new Set<number>();
+  const result: OcrWordBox[] = [];
+
+  for (let i = 0; i < sorted.length; i += 1) {
+    if (used.has(i)) continue;
+    const top = sorted[i];
+    const topText = top.text.trim();
+
+    if (mathTokenRegex.test(topText)) {
+      const topCx = (top.bbox.x0 + top.bbox.x1) / 2;
+      const topW = Math.max(1, top.bbox.x1 - top.bbox.x0);
+      let bestJ = -1;
+      let bestDy = Number.POSITIVE_INFINITY;
+
+      for (let j = i + 1; j < sorted.length; j += 1) {
+        if (used.has(j)) continue;
+        const bot = sorted[j];
+        const botText = bot.text.trim();
+        if (!mathTokenRegex.test(botText)) continue;
+
+        const dy = bot.bbox.y0 - top.bbox.y0;
+        if (dy < 8 * scale) continue;
+        if (dy > 24 * scale) break;
+
+        const botCx = (bot.bbox.x0 + bot.bbox.x1) / 2;
+        const botW = Math.max(1, bot.bbox.x1 - bot.bbox.x0);
+        const maxAlignDiff = Math.max(8 * scale, Math.max(topW, botW) * 0.65);
+
+        if (Math.abs(topCx - botCx) <= maxAlignDiff && dy < bestDy) {
+          bestDy = dy;
+          bestJ = j;
+        }
+      }
+
+      if (bestJ !== -1) {
+        const bot = sorted[bestJ];
+        used.add(i);
+        used.add(bestJ);
+        result.push({
+          text: `${topText}/${bot.text.trim()}`,
+          bbox: {
+            x0: Math.min(top.bbox.x0, bot.bbox.x0),
+            y0: top.bbox.y0,
+            x1: Math.max(top.bbox.x1, bot.bbox.x1),
+            y1: bot.bbox.y1,
+          },
+        });
+        continue;
+      }
+    }
+
+    used.add(i);
+    result.push(top);
+  }
+
+  return result;
 }
 
 function mergeCleanDigitalAndOcrWords(
@@ -486,6 +554,7 @@ function reconstructOcrPageWithPdfAnchors(
   qAnchors.sort((a, b) => a.pyTop - b.pyTop);
   const footerLimitPx = (pageHeight - 52) * scale;
   const outputBlocks: string[] = [];
+  const mergedDigitalBoxes = collapseStackedFractionBoxes(cleanDigitalBoxes, scale);
 
   for (let i = 0; i < qAnchors.length; i += 1) {
     const q = qAnchors[i];
@@ -563,7 +632,7 @@ function reconstructOcrPageWithPdfAnchors(
       }
     };
 
-    for (const d of cleanDigitalBoxes) {
+    for (const d of mergedDigitalBoxes) {
       assignBox(d, stemDigital, optionDigital, false);
     }
     for (const w of ocrWords) {
@@ -626,11 +695,56 @@ export function normalizeOptionKey(raw: string): OptionKey | null {
 }
 
 function sortColumnLines(items: PositionedTextItem[]): string {
+  const mathTokenRegex = /^[+-]?(?:\d+(?:\.\d+)?|[a-zA-Zπμ∈√²³()]{1,10})$/;
+  const validItems = items.filter((it) => it.str.trim().length > 0);
+  const usedIdx = new Set<number>();
+  const normalizedItems: PositionedTextItem[] = [];
+
+  for (let i = 0; i < validItems.length; i += 1) {
+    if (usedIdx.has(i)) continue;
+    const top = validItems[i];
+    const tStr = top.str.trim();
+    if (mathTokenRegex.test(tStr)) {
+      const topW = top.width && top.width > 0 ? top.width : tStr.length * 5.5;
+      const topCx = top.x + topW / 2;
+      let bestJ = -1;
+      let bestDy = Number.POSITIVE_INFINITY;
+      for (let j = 0; j < validItems.length; j += 1) {
+        if (j === i || usedIdx.has(j)) continue;
+        const bot = validItems[j];
+        const bStr = bot.str.trim();
+        if (!mathTokenRegex.test(bStr)) continue;
+        const dy = top.y - bot.y;
+        if (dy < 8 || dy > 24) continue;
+        const botW = bot.width && bot.width > 0 ? bot.width : bStr.length * 5.5;
+        const botCx = bot.x + botW / 2;
+        if (Math.abs(topCx - botCx) <= Math.max(8, Math.max(topW, botW) * 0.65) && dy < bestDy) {
+          bestDy = dy;
+          bestJ = j;
+        }
+      }
+      if (bestJ !== -1) {
+        const bot = validItems[bestJ];
+        usedIdx.add(i);
+        usedIdx.add(bestJ);
+        normalizedItems.push({
+          str: `${tStr}/${bot.str.trim()}`,
+          x: Math.min(top.x, bot.x),
+          y: (top.y + bot.y) / 2,
+          width: Math.max(top.width ?? 0, bot.width ?? 0),
+        });
+        continue;
+      }
+    }
+    usedIdx.add(i);
+    normalizedItems.push(top);
+  }
+
   const lines: Array<{ y: number; parts: Array<{ x: number; text: string }> }> = [];
 
-  for (const item of items) {
+  for (const item of normalizedItems) {
     if (!item.str.trim()) continue;
-    let line = lines.find((l) => Math.abs(l.y - item.y) < 4);
+    let line = lines.find((l) => Math.abs(l.y - item.y) < 5);
     if (!line) {
       line = { y: item.y, parts: [] };
       lines.push(line);
@@ -647,6 +761,7 @@ function sortColumnLines(items: PositionedTextItem[]): string {
         .map((p) => p.text)
         .join(' ')
         .replace(/[ \t]+/g, ' ')
+        .replace(/\s+([,;:?])/g, '$1')
         .trim()
     )
     .join('\n');
@@ -1581,7 +1696,6 @@ export function parseMultiBookletAnswerKey(rawText: string): MultiBookletAnswerK
     D: {},
   };
 
-  // Format 1: Tabular 4-booklet rows "<qNum> <ansA> <ansB> <ansC> <ansD>"
   const fourColRowRegex =
     /(?:^|[\s|])(\d{1,3})[.)]?\s+\(?([A-Da-dX*\-]|DEL(?:ETED)?)\)?\s+\(?([A-Da-dX*\-]|DEL(?:ETED)?)\)?\s+\(?([A-Da-dX*\-]|DEL(?:ETED)?)\)?\s+\(?([A-Da-dX*\-]|DEL(?:ETED)?)\)?(?=$|[\s|])/gi;
 
@@ -1610,7 +1724,6 @@ export function parseMultiBookletAnswerKey(rawText: string): MultiBookletAnswerK
     };
   }
 
-  // Format 2: 8-column paired rows "1 B 1 C 1 A 1 D"
   const paired4Regex =
     /(?:^|\n)\s*(\d{1,3})[.)]?\s+\(?([A-Da-dX*\-])\)?\s+(\d{1,3})[.)]?\s+\(?([A-Da-dX*\-])\)?\s+(\d{1,3})[.)]?\s+\(?([A-Da-dX*\-])\)?\s+(\d{1,3})[.)]?\s+\(?([A-Da-dX*\-])\)?\s*(?=$|\n)/gi;
 
@@ -1644,7 +1757,6 @@ export function parseMultiBookletAnswerKey(rawText: string): MultiBookletAnswerK
     };
   }
 
-  // Format 3: Sectioned multi-booklet key ("ALPHA CODE : A ... ALPHA CODE : B ...")
   const sectionRegex =
     /(?:question\s+booklet\s+)?(?:alpha\s+code|booklet\s+code|series|set|ചോദ്യ\s*പുസ്തക\s*അക്ഷര\s*കോഡ്)\s*[:\-]?\s*\(?([A-D])\)?/gi;
   const sectionStarts: Array<{ code: OptionKey; index: number; bodyStart: number }> = [];
@@ -1686,7 +1798,6 @@ export function parseMultiBookletAnswerKey(rawText: string): MultiBookletAnswerK
     }
   }
 
-  // Format 4: Single-booklet fallback
   const single = parseSingleBookletAnswerKey(normalized);
   return {
     byBooklet: {},
