@@ -15,6 +15,10 @@ import { SAMPLE_EXAM_QUESTIONS, SAMPLE_EXAM_TITLE } from '../data/sampleExam';
 import { computeQuestionWarnings } from '../utils/pdfParser';
 import { gradeExam, shuffleQuestions } from '../utils/scoring';
 import { localFolderStorage } from '../services/localFolderStorage';
+import {
+  QuestionOutcomeUpdate,
+  updateQuestionStatsAfterExam,
+} from '../services/examHeadManager';
 
 interface SlateCanvasState {
   strokes: SlateStroke[];
@@ -30,6 +34,7 @@ interface NewQuestionInput {
 
 interface ExamStoreState {
   phase: AppPhase;
+  activeExamHeadId: string | null;
   settings: ExamSettings;
   questions: ExamQuestion[];
   responses: Record<number, QuestionResponse>;
@@ -61,6 +66,7 @@ interface ExamStoreState {
 
   startExam: () => void;
   finishExam: () => void;
+  discardActiveExam: () => void;
   retakeExam: (shuffle?: boolean | unknown) => void;
   resetAll: () => void;
   clearAttemptHistory: () => void;
@@ -107,6 +113,7 @@ function createInitialResponses(questions: ExamQuestion[]): Record<number, Quest
 
 function createAttemptRecord(
   title: string,
+  examHeadId: string | null,
   questions: ExamQuestion[],
   responses: Record<number, QuestionResponse>,
   totalTimeUsedSeconds: number,
@@ -121,23 +128,52 @@ function createAttemptRecord(
   return {
     id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     completedAt: new Date().toISOString(),
+    examHeadId: examHeadId ?? undefined,
     examTitle: title,
     finalScore: scorecard.finalScore,
     totalMarks: scorecard.totalMarks,
+    totalQuestions: scorecard.totalQuestions,
     percentage: scorecard.percentage,
     accuracy: scorecard.accuracy,
     correctCount: scorecard.correctCount,
     wrongCount: scorecard.wrongCount,
     skippedCount: scorecard.skippedCount,
+    negativeMarksDeducted: scorecard.negativeMarksDeducted,
     overtimeCount: scorecard.overtimeCount,
     totalTimeUsedSeconds: scorecard.totalTimeUsedSeconds,
+    averageTimePerQuestionSeconds: scorecard.averageTimePerQuestionSeconds,
+    perQuestionLimitSeconds: perQuestionDurationSeconds,
+    items: scorecard.items,
   };
+}
+
+function persistAttemptAndStats(
+  record: PracticeAttemptRecord,
+  examHeadId: string | null
+): void {
+  void localFolderStorage.saveAttemptResult(record).catch(() => {});
+
+  if (examHeadId && record.items && record.items.length > 0) {
+    const outcomes: QuestionOutcomeUpdate[] = [];
+    for (const item of record.items) {
+      if (item.sourceQuestionId) {
+        outcomes.push({
+          questionId: item.sourceQuestionId,
+          result: item.outcome,
+        });
+      }
+    }
+    if (outcomes.length > 0) {
+      void updateQuestionStatsAfterExam(examHeadId, outcomes).catch(() => {});
+    }
+  }
 }
 
 export const useExamStore = create<ExamStoreState>()(
   persist(
     (set, get) => ({
       phase: 'upload',
+      activeExamHeadId: null,
       settings: DEFAULT_SETTINGS,
       questions: [],
       responses: {},
@@ -253,6 +289,7 @@ export const useExamStore = create<ExamStoreState>()(
 
       loadSampleExam: () =>
         set((state) => ({
+          activeExamHeadId: null,
           settings: {
             ...state.settings,
             title: SAMPLE_EXAM_TITLE,
@@ -267,15 +304,21 @@ export const useExamStore = create<ExamStoreState>()(
 
       loadSavedExamPackage: (pkg, shuffle) => {
         const prepared = shuffle ? shuffleQuestions(pkg.questions) : pkg.questions;
+        const normalized = prepared.map((q, idx) => ({
+          ...q,
+          number: idx + 1,
+        }));
         set({
+          activeExamHeadId: pkg.examHeadId ?? null,
           settings: { ...DEFAULT_SETTINGS, ...pkg.settings },
-          questions: prepared,
+          questions: normalized,
           phase: 'exam',
           currentIndex: 0,
-          responses: createInitialResponses(prepared),
+          responses: createInitialResponses(normalized),
           globalRemainingSeconds: Math.max(1, pkg.settings.globalDurationMinutes || 90) * 60,
           totalTimeUsedSeconds: 0,
           examFinishedAt: null,
+          slateOpen: false,
           slates: {},
         });
       },
@@ -295,6 +338,7 @@ export const useExamStore = create<ExamStoreState>()(
           globalRemainingSeconds: Math.max(1, settings.globalDurationMinutes) * 60,
           totalTimeUsedSeconds: 0,
           examFinishedAt: null,
+          slateOpen: false,
           slates: {},
         });
       },
@@ -303,12 +347,13 @@ export const useExamStore = create<ExamStoreState>()(
         set((state) => {
           const record = createAttemptRecord(
             state.settings.title,
+            state.activeExamHeadId,
             state.questions,
             state.responses,
             state.totalTimeUsedSeconds,
             state.settings.perQuestionDurationSeconds
           );
-          void localFolderStorage.saveAttemptResult(record).catch(() => {});
+          persistAttemptAndStats(record, state.activeExamHeadId);
           return {
             phase: 'results',
             slateOpen: false,
@@ -317,8 +362,24 @@ export const useExamStore = create<ExamStoreState>()(
           };
         }),
 
+      discardActiveExam: () =>
+        set((state) => ({
+          phase: 'upload',
+          activeExamHeadId: null,
+          questions: [],
+          responses: {},
+          currentIndex: 0,
+          globalRemainingSeconds: DEFAULT_SETTINGS.globalDurationMinutes * 60,
+          totalTimeUsedSeconds: 0,
+          examFinishedAt: null,
+          slateOpen: false,
+          slates: {},
+          attemptHistory: state.attemptHistory,
+        })),
+
       retakeExam: (shuffle = true) => {
         const { questions, settings } = get();
+        if (questions.length === 0) return;
         const shouldShuffle = typeof shuffle === 'boolean' ? shuffle : true;
         const nextQuestions = shouldShuffle ? shuffleQuestions(questions) : questions;
         set({
@@ -329,6 +390,7 @@ export const useExamStore = create<ExamStoreState>()(
           globalRemainingSeconds: Math.max(1, settings.globalDurationMinutes) * 60,
           totalTimeUsedSeconds: 0,
           examFinishedAt: null,
+          slateOpen: false,
           slates: {},
         });
       },
@@ -336,6 +398,7 @@ export const useExamStore = create<ExamStoreState>()(
       resetAll: () =>
         set((state) => ({
           phase: 'upload',
+          activeExamHeadId: null,
           settings: DEFAULT_SETTINGS,
           questions: [],
           responses: {},
@@ -538,12 +601,13 @@ export const useExamStore = create<ExamStoreState>()(
         if (nextGlobal <= 0) {
           const record = createAttemptRecord(
             state.settings.title,
+            state.activeExamHeadId,
             state.questions,
             updatedResponses,
             nextTotalUsed,
             state.settings.perQuestionDurationSeconds
           );
-          void localFolderStorage.saveAttemptResult(record).catch(() => {});
+          persistAttemptAndStats(record, state.activeExamHeadId);
           set({
             globalRemainingSeconds: 0,
             totalTimeUsedSeconds: nextTotalUsed,
