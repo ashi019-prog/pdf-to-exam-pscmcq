@@ -9,7 +9,7 @@ export interface ImportedPaperMeta {
 
 export interface ExamHeadQuestion {
   id: string;
-  number: number;
+  number: number; // Sequential across the entire Exam Head (1..N)
   paperId: string;
   paperLabel: string;
   text: string;
@@ -27,7 +27,7 @@ export interface ExamHeadQuestion {
 
 export interface ExamHeadFile {
   id: string;
-  title: string;
+  title: string; // e.g., "Village Assistant"
   createdAt: string;
   updatedAt: string;
   importedPapers: ImportedPaperMeta[];
@@ -61,6 +61,7 @@ export interface StorageStatusSnapshot {
   supported: boolean;
 }
 
+// Self-contained File System Access API types so strict TS builds cleanly without extra @types packages
 interface WritableStreamLike {
   write: (data: string) => Promise<void>;
   close: () => Promise<void>;
@@ -86,11 +87,43 @@ interface DirectoryHandleLike {
   values: () => AsyncIterableIterator<FileHandleLike | DirectoryHandleLike>;
 }
 
-interface WindowWithDirPicker extends Window {
+type CapacitorDirectory = 'DOCUMENTS' | 'DATA';
+
+interface CapacitorFilesystemPlugin {
+  mkdir: (opts: {
+    path: string;
+    directory: CapacitorDirectory;
+    recursive?: boolean;
+  }) => Promise<void>;
+  readdir: (opts: {
+    path: string;
+    directory: CapacitorDirectory;
+  }) => Promise<{ files: Array<{ name: string; type?: string }> }>;
+  readFile: (opts: {
+    path: string;
+    directory: CapacitorDirectory;
+    encoding: 'utf8';
+  }) => Promise<{ data: string }>;
+  writeFile: (opts: {
+    path: string;
+    directory: CapacitorDirectory;
+    data: string;
+    encoding: 'utf8';
+    recursive?: boolean;
+  }) => Promise<void>;
+}
+
+interface WindowWithNativeStorage extends Window {
   showDirectoryPicker?: (options?: {
     id?: string;
     mode?: 'read' | 'readwrite';
   }) => Promise<DirectoryHandleLike>;
+  Capacitor?: {
+    isNativePlatform?: () => boolean;
+    Plugins?: {
+      Filesystem?: CapacitorFilesystemPlugin;
+    };
+  };
 }
 
 const DB_NAME = 'exam-platform-db';
@@ -100,6 +133,9 @@ const STORE_EXAM_HEADS = 'exam-heads';
 const STORE_ATTEMPTS = 'attempt-history';
 const ROOT_HANDLE_KEY = 'rootDirHandle';
 const RESULTS_KEY = 'results';
+const CAP_ROOT_FOLDER = 'PSC-Exam-Studio';
+const CAP_EXAM_HEADS_DIR = `${CAP_ROOT_FOLDER}/exam-heads`;
+const CAP_ATTEMPTS_DIR = `${CAP_ROOT_FOLDER}/attempt-history`;
 
 export function slugifyExamHead(title: string): string {
   const slug = title
@@ -108,6 +144,13 @@ export function slugifyExamHead(title: string): string {
     .replace(/[^a-z0-9\u0D00-\u0D7F]+/g, '-')
     .replace(/^-+|-+$/g, '');
   return slug || `exam-head-${Date.now()}`;
+}
+
+function getCapacitorFs(): CapacitorFilesystemPlugin | null {
+  if (typeof window === 'undefined') return null;
+  const cap = (window as WindowWithNativeStorage).Capacitor;
+  if (!cap || !cap.isNativePlatform || !cap.isNativePlatform()) return null;
+  return cap.Plugins && cap.Plugins.Filesystem ? cap.Plugins.Filesystem : null;
 }
 
 function openDatabase(): Promise<IDBDatabase> {
@@ -162,6 +205,7 @@ async function idbGetAll<T>(storeName: string): Promise<T[]> {
 
 class LocalStorageEngine {
   private rootHandle: DirectoryHandleLike | null = null;
+  private capDirectory: CapacitorDirectory | null = null;
   private status: FolderConnectionStatus = 'disconnected';
   private folderName: string | null = null;
   private listeners = new Set<() => void>();
@@ -173,9 +217,10 @@ class LocalStorageEngine {
   }
 
   public isSupported(): boolean {
+    if (getCapacitorFs() !== null) return true;
     return (
       typeof window !== 'undefined' &&
-      typeof (window as WindowWithDirPicker).showDirectoryPicker === 'function'
+      typeof (window as WindowWithNativeStorage).showDirectoryPicker === 'function'
     );
   }
 
@@ -198,6 +243,82 @@ class LocalStorageEngine {
     this.listeners.forEach((fn) => fn());
   }
 
+  private async ensureCapacitorFolders(): Promise<CapacitorDirectory | null> {
+    const fs = getCapacitorFs();
+    if (!fs) return null;
+
+    if (this.capDirectory) {
+      return this.capDirectory;
+    }
+
+    const candidates: CapacitorDirectory[] = ['DOCUMENTS', 'DATA'];
+    for (const dir of candidates) {
+      try {
+        await fs.mkdir({ path: CAP_EXAM_HEADS_DIR, directory: dir, recursive: true });
+        await fs.mkdir({ path: CAP_ATTEMPTS_DIR, directory: dir, recursive: true });
+        this.capDirectory = dir;
+        this.folderName =
+          dir === 'DOCUMENTS' ? `Documents/${CAP_ROOT_FOLDER}` : `App Storage/${CAP_ROOT_FOLDER}`;
+        this.status = 'connected';
+        return dir;
+      } catch {
+        // Try next directory candidate
+      }
+    }
+
+    this.capDirectory = null;
+    this.status = 'fallback';
+    this.folderName = null;
+    return null;
+  }
+
+  private async capReadJson<T>(relativePath: string): Promise<T | null> {
+    const fs = getCapacitorFs();
+    const dir = await this.ensureCapacitorFolders();
+    if (!fs || !dir) return null;
+    try {
+      const res = await fs.readFile({ path: relativePath, directory: dir, encoding: 'utf8' });
+      if (!res.data || !res.data.trim()) return null;
+      return JSON.parse(res.data) as T;
+    } catch {
+      return null;
+    }
+  }
+
+  private async capWriteJson<T>(relativePath: string, data: T): Promise<void> {
+    const fs = getCapacitorFs();
+    const dir = await this.ensureCapacitorFolders();
+    if (!fs || !dir) return;
+    await fs.writeFile({
+      path: relativePath,
+      directory: dir,
+      data: JSON.stringify(data, null, 2),
+      encoding: 'utf8',
+      recursive: true,
+    });
+  }
+
+  private async capListExamHeadJsonFiles(): Promise<unknown[]> {
+    const fs = getCapacitorFs();
+    const dir = await this.ensureCapacitorFolders();
+    if (!fs || !dir) return [];
+    try {
+      const listing = await fs.readdir({ path: CAP_EXAM_HEADS_DIR, directory: dir });
+      const results: unknown[] = [];
+      for (const entry of listing.files) {
+        if (entry.name.toLowerCase().endsWith('.json')) {
+          const parsed = await this.capReadJson<unknown>(`${CAP_EXAM_HEADS_DIR}/${entry.name}`);
+          if (parsed && typeof parsed === 'object') {
+            results.push(parsed);
+          }
+        }
+      }
+      return results;
+    } catch {
+      return [];
+    }
+  }
+
   private async ensureSubfolders(dirHandle: DirectoryHandleLike): Promise<{
     examHeadsDir: DirectoryHandleLike;
     attemptHistoryDir: DirectoryHandleLike;
@@ -210,6 +331,12 @@ class LocalStorageEngine {
   }
 
   public async connectFolder(): Promise<StorageStatusSnapshot> {
+    if (getCapacitorFs() !== null) {
+      await this.ensureCapacitorFolders();
+      this.notify();
+      return this.getStatusSnapshot();
+    }
+
     if (!this.isSupported()) {
       this.status = 'fallback';
       this.folderName = null;
@@ -217,7 +344,7 @@ class LocalStorageEngine {
       return this.getStatusSnapshot();
     }
 
-    const picker = (window as WindowWithDirPicker).showDirectoryPicker;
+    const picker = (window as WindowWithNativeStorage).showDirectoryPicker;
     if (!picker) {
       this.status = 'fallback';
       this.notify();
@@ -236,6 +363,12 @@ class LocalStorageEngine {
   }
 
   public async checkStoredFolder(): Promise<StorageStatusSnapshot> {
+    if (getCapacitorFs() !== null) {
+      await this.ensureCapacitorFolders();
+      this.notify();
+      return this.getStatusSnapshot();
+    }
+
     if (!this.isSupported()) {
       this.status = 'fallback';
       this.folderName = null;
@@ -275,6 +408,12 @@ class LocalStorageEngine {
   }
 
   public async reconnectFolder(): Promise<StorageStatusSnapshot> {
+    if (getCapacitorFs() !== null) {
+      await this.ensureCapacitorFolders();
+      this.notify();
+      return this.getStatusSnapshot();
+    }
+
     if (!this.isSupported()) {
       this.status = 'fallback';
       this.notify();
@@ -345,6 +484,14 @@ class LocalStorageEngine {
   }
 
   public async getAllExamHeadFiles(): Promise<ExamHeadFile[]> {
+    if (getCapacitorFs() !== null) {
+      const raw = await this.capListExamHeadJsonFiles();
+      return raw.filter((item): item is ExamHeadFile => {
+        const rec = item as Partial<ExamHeadFile>;
+        return Boolean(rec && rec.id && Array.isArray(rec.questions));
+      });
+    }
+
     if (this.status === 'connected' && this.rootHandle) {
       const { examHeadsDir } = await this.ensureSubfolders(this.rootHandle);
       const results: ExamHeadFile[] = [];
@@ -357,7 +504,7 @@ class LocalStorageEngine {
               results.push(parsed);
             }
           } catch {
-            // Skip malformed JSON files
+            // Skip malformed JSON files without breaking the library
           }
         }
       }
@@ -368,6 +515,9 @@ class LocalStorageEngine {
   }
 
   public async readExamHeadRaw(examHeadSlug: string): Promise<unknown | null> {
+    if (getCapacitorFs() !== null) {
+      return this.capReadJson<unknown>(`${CAP_EXAM_HEADS_DIR}/${examHeadSlug}.json`);
+    }
     if (this.status === 'connected' && this.rootHandle) {
       const { examHeadsDir } = await this.ensureSubfolders(this.rootHandle);
       return this.readJsonFile<unknown>(examHeadsDir, `${examHeadSlug}.json`);
@@ -377,7 +527,10 @@ class LocalStorageEngine {
   }
 
   public async writeExamHeadRaw(examHeadSlug: string, data: unknown): Promise<void> {
-    if (this.status === 'connected' && this.rootHandle) {
+    if (getCapacitorFs() !== null) {
+      await this.capWriteJson(`${CAP_EXAM_HEADS_DIR}/${examHeadSlug}.json`, data);
+      await idbSet(STORE_EXAM_HEADS, examHeadSlug, data).catch(() => {});
+    } else if (this.status === 'connected' && this.rootHandle) {
       const { examHeadsDir } = await this.ensureSubfolders(this.rootHandle);
       await this.writeJsonFile(examHeadsDir, `${examHeadSlug}.json`, data);
     } else {
@@ -387,6 +540,9 @@ class LocalStorageEngine {
   }
 
   public async listExamHeadsRaw(): Promise<unknown[]> {
+    if (getCapacitorFs() !== null) {
+      return this.capListExamHeadJsonFiles();
+    }
     if (this.status === 'connected' && this.rootHandle) {
       const { examHeadsDir } = await this.ensureSubfolders(this.rootHandle);
       const results: unknown[] = [];
@@ -409,6 +565,9 @@ class LocalStorageEngine {
   }
 
   public async getExamHead(examHeadSlug: string): Promise<ExamHeadFile | null> {
+    if (getCapacitorFs() !== null) {
+      return this.capReadJson<ExamHeadFile>(`${CAP_EXAM_HEADS_DIR}/${examHeadSlug}.json`);
+    }
     if (this.status === 'connected' && this.rootHandle) {
       const { examHeadsDir } = await this.ensureSubfolders(this.rootHandle);
       return this.readJsonFile<ExamHeadFile>(examHeadsDir, `${examHeadSlug}.json`);
@@ -465,14 +624,8 @@ class LocalStorageEngine {
           questions: formattedNew,
         };
 
-    if (this.status === 'connected' && this.rootHandle) {
-      const { examHeadsDir } = await this.ensureSubfolders(this.rootHandle);
-      await this.writeJsonFile(examHeadsDir, `${examHeadSlug}.json`, updatedFile);
-    } else {
-      await idbSet(STORE_EXAM_HEADS, examHeadSlug, updatedFile);
-    }
+    await this.writeExamHeadRaw(examHeadSlug, updatedFile);
 
-    this.notify();
     return {
       examHead: updatedFile,
       addedCount: formattedNew.length,
@@ -497,14 +650,7 @@ class LocalStorageEngine {
       questions: filtered,
     };
 
-    if (this.status === 'connected' && this.rootHandle) {
-      const { examHeadsDir } = await this.ensureSubfolders(this.rootHandle);
-      await this.writeJsonFile(examHeadsDir, `${examHeadSlug}.json`, updated);
-    } else {
-      await idbSet(STORE_EXAM_HEADS, examHeadSlug, updated);
-    }
-
-    this.notify();
+    await this.writeExamHeadRaw(examHeadSlug, updated);
     return updated;
   }
 
@@ -526,18 +672,17 @@ class LocalStorageEngine {
       questions: updatedQuestions,
     };
 
-    if (this.status === 'connected' && this.rootHandle) {
-      const { examHeadsDir } = await this.ensureSubfolders(this.rootHandle);
-      await this.writeJsonFile(examHeadsDir, `${examHeadSlug}.json`, updated);
-    } else {
-      await idbSet(STORE_EXAM_HEADS, examHeadSlug, updated);
-    }
-
-    this.notify();
+    await this.writeExamHeadRaw(examHeadSlug, updated);
     return updated;
   }
 
   public async listAttemptResults(): Promise<PracticeAttemptRecord[]> {
+    if (getCapacitorFs() !== null) {
+      const data = await this.capReadJson<PracticeAttemptRecord[]>(
+        `${CAP_ATTEMPTS_DIR}/results.json`
+      );
+      return Array.isArray(data) ? data : [];
+    }
     if (this.status === 'connected' && this.rootHandle) {
       const { attemptHistoryDir } = await this.ensureSubfolders(this.rootHandle);
       const data = await this.readJsonFile<PracticeAttemptRecord[]>(
@@ -554,7 +699,10 @@ class LocalStorageEngine {
     const current = await this.listAttemptResults();
     const updated = [resultSummary, ...current].slice(0, 200);
 
-    if (this.status === 'connected' && this.rootHandle) {
+    if (getCapacitorFs() !== null) {
+      await this.capWriteJson(`${CAP_ATTEMPTS_DIR}/results.json`, updated);
+      await idbSet(STORE_ATTEMPTS, RESULTS_KEY, updated).catch(() => {});
+    } else if (this.status === 'connected' && this.rootHandle) {
       const { attemptHistoryDir } = await this.ensureSubfolders(this.rootHandle);
       await this.writeJsonFile(attemptHistoryDir, 'results.json', updated);
     } else {
@@ -585,17 +733,15 @@ class LocalStorageEngine {
     let restoredHeads = 0;
     for (const head of bundle.examHeads) {
       if (!head.id || !Array.isArray(head.questions)) continue;
-      if (this.status === 'connected' && this.rootHandle) {
-        const { examHeadsDir } = await this.ensureSubfolders(this.rootHandle);
-        await this.writeJsonFile(examHeadsDir, `${head.id}.json`, head);
-      } else {
-        await idbSet(STORE_EXAM_HEADS, head.id, head);
-      }
+      await this.writeExamHeadRaw(head.id, head);
       restoredHeads += 1;
     }
 
     if (Array.isArray(bundle.attemptHistory) && bundle.attemptHistory.length > 0) {
-      if (this.status === 'connected' && this.rootHandle) {
+      if (getCapacitorFs() !== null) {
+        await this.capWriteJson(`${CAP_ATTEMPTS_DIR}/results.json`, bundle.attemptHistory);
+        await idbSet(STORE_ATTEMPTS, RESULTS_KEY, bundle.attemptHistory).catch(() => {});
+      } else if (this.status === 'connected' && this.rootHandle) {
         const { attemptHistoryDir } = await this.ensureSubfolders(this.rootHandle);
         await this.writeJsonFile(attemptHistoryDir, 'results.json', bundle.attemptHistory);
       } else {
