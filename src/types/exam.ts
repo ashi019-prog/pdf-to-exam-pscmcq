@@ -37,6 +37,8 @@ export interface ExamQuestion {
   table?: QuestionTableData;
   warnings: ParseWarning[];
   ocrConfidence?: number;
+  sourceQuestionId?: string;
+  paperLabel?: string;
 }
 
 export interface SavedExamPackage {
@@ -44,6 +46,7 @@ export interface SavedExamPackage {
   savedAt: string;
   settings: ExamSettings;
   questions: ExamQuestion[];
+  examHeadId?: string;
 }
 
 export interface QuestionResponse {
@@ -102,6 +105,8 @@ export interface QuestionReviewItem {
   explanation?: string;
   imageDataUrl?: string;
   table?: QuestionTableData;
+  paperLabel?: string;
+  sourceQuestionId?: string;
   outcome: ReviewOutcome;
   marksAwarded: number;
   timeSpentSeconds: number;
@@ -130,14 +135,22 @@ export interface ExamScorecard {
 export interface PracticeAttemptRecord {
   id: string;
   completedAt: string;
+  examHeadId?: string;
   examTitle: string;
   finalScore: number;
   totalMarks: number;
+  totalQuestions?: number;
   percentage: number;
   accuracy: number;
   correctCount: number;
   wrongCount: number;
   skippedCount: number;
+  negativeMarksDeducted?: number;
   overtimeCount: number;
   totalTimeUsedSeconds: number;
+  averageTimePerQuestionSeconds?: number;
+  perQuestionLimitSeconds?: number;
+  items?: QuestionReviewItem[];
 }
+
+export type ExamResult = PracticeAttemptRecord;
