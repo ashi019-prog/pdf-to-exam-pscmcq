@@ -10,9 +10,11 @@ import {
   Lock,
   Save,
   X,
+  ListOrdered,
 } from 'lucide-react';
 import { useExamStore } from '../../store/useExamStore';
 import { OPTION_KEYS, OptionKey, SavedExamPackage } from '../../types/exam';
+import { autoFixMalayalamPaste } from '../../utils/shreeMalConverter';
 
 const MATH_SYMBOLS = ['√', '²', '³', 'π', 'θ', '≤', '≥', '±', '×', '÷', '°'];
 
@@ -27,6 +29,7 @@ export const VerificationEditor: React.FC = () => {
     settings,
     questions,
     setPhase,
+    setQuestions,
     updateQuestionAt,
     addCustomQuestion,
     deleteQuestionAt,
@@ -50,6 +53,15 @@ export const VerificationEditor: React.FC = () => {
   const totalWarnings = questions.reduce((sum, q) => sum + q.warnings.length, 0);
   const questionsWithWarnings = questions.filter((q) => q.warnings.length > 0).length;
 
+  const handleRenumberSequentially = () => {
+    setQuestions(
+      questions.map((q, idx) => ({
+        ...q,
+        number: idx + 1,
+      }))
+    );
+  };
+
   const openAddModal = () => {
     const maxNum = questions.reduce((max, q) => Math.max(max, q.number), 0);
     setNewNumber(String(maxNum + 1));
@@ -64,11 +76,33 @@ export const VerificationEditor: React.FC = () => {
     if (!newText.trim()) return;
     addCustomQuestion({
       number: parseInt(newNumber, 10) || undefined,
-      text: newText,
-      options: newOptions,
+      text: autoFixMalayalamPaste(newText),
+      options: {
+        A: autoFixMalayalamPaste(newOptions.A),
+        B: autoFixMalayalamPaste(newOptions.B),
+        C: autoFixMalayalamPaste(newOptions.C),
+        D: autoFixMalayalamPaste(newOptions.D),
+      },
       correctOption: newAnswer,
     });
     setAddModalOpen(false);
+  };
+
+  const handleSmartPaste = (
+    e: React.ClipboardEvent<HTMLTextAreaElement | HTMLInputElement>,
+    currentVal: string,
+    onChangeVal: (next: string) => void
+  ) => {
+    const raw = e.clipboardData.getData('text');
+    const fixed = autoFixMalayalamPaste(raw);
+    if (fixed !== raw) {
+      e.preventDefault();
+      const el = e.currentTarget;
+      const start = el.selectionStart ?? currentVal.length;
+      const end = el.selectionEnd ?? currentVal.length;
+      const next = currentVal.slice(0, start) + fixed + currentVal.slice(end);
+      onChangeVal(next);
+    }
   };
 
   const insertMathSymbol = (symbol: string) => {
@@ -143,12 +177,22 @@ export const VerificationEditor: React.FC = () => {
               </h1>
               <p className="text-xs text-slate-500">
                 {settings.title} • {questions.length} question{questions.length === 1 ? '' : 's'} •{' '}
-                Answer keys stay hidden until Results
+                Auto-converts pasted PSC Malayalam
               </p>
             </div>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              disabled={questions.length === 0}
+              onClick={handleRenumberSequentially}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-40"
+              title="Fix question numbering to be continuous 1, 2, 3..."
+            >
+              <ListOrdered className="h-4 w-4" />
+              Renumber 1–{questions.length}
+            </button>
             <button
               type="button"
               disabled={questions.length === 0}
@@ -214,8 +258,8 @@ export const VerificationEditor: React.FC = () => {
                 {questionsWithWarnings} question{questionsWithWarnings === 1 ? '' : 's'}
               </p>
               <p className="mt-0.5 text-xs text-amber-800">
-                Review highlighted cards below to fix missing options or OCR text. Matched answer
-                keys are kept hidden so they don&apos;t spoil your exam.
+                Review highlighted cards below to fix missing options or text. Copy-pasting legacy
+                PSC Malayalam text automatically converts to Unicode Malayalam.
               </p>
             </div>
           </div>
@@ -310,8 +354,13 @@ export const VerificationEditor: React.FC = () => {
                       };
                       setActiveLabel(`Editing Q${q.number} stem`);
                     }}
+                    onPaste={(e) =>
+                      handleSmartPaste(e, q.text, (next) =>
+                        updateQuestionAt(index, { text: next })
+                      )
+                    }
                     onChange={(e) => updateQuestionAt(index, { text: e.target.value })}
-                    placeholder="Enter question text (line breaks and math symbols preserved)..."
+                    placeholder="Enter question text (pasting PSC Malayalam auto-converts to Unicode)..."
                     className="w-full rounded-lg border border-slate-200 px-3 py-2 font-sans text-sm text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-100"
                   />
                 </div>
@@ -335,6 +384,13 @@ export const VerificationEditor: React.FC = () => {
                             };
                             setActiveLabel(`Editing Q${q.number} Option ${key}`);
                           }}
+                          onPaste={(e) =>
+                            handleSmartPaste(e, q.options[key], (next) =>
+                              updateQuestionAt(index, {
+                                options: { ...q.options, [key]: next },
+                              })
+                            )
+                          }
                           onChange={(e) =>
                             updateQuestionAt(index, {
                               options: { ...q.options, [key]: e.target.value },
@@ -411,11 +467,14 @@ export const VerificationEditor: React.FC = () => {
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-600">Question Text</label>
+                <label className="block text-xs font-semibold text-slate-600">
+                  Question Text (pasting PSC Malayalam converts automatically)
+                </label>
                 <textarea
                   rows={3}
                   required
                   value={newText}
+                  onPaste={(e) => handleSmartPaste(e, newText, setNewText)}
                   onChange={(e) => setNewText(e.target.value)}
                   placeholder="Type or paste the question here..."
                   className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none"
@@ -432,6 +491,11 @@ export const VerificationEditor: React.FC = () => {
                       type="text"
                       required
                       value={newOptions[key]}
+                      onPaste={(e) =>
+                        handleSmartPaste(e, newOptions[key], (next) =>
+                          setNewOptions((prev) => ({ ...prev, [key]: next }))
+                        )
+                      }
                       onChange={(e) =>
                         setNewOptions((prev) => ({ ...prev, [key]: e.target.value }))
                       }
