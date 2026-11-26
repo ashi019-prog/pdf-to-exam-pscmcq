@@ -1,0 +1,77 @@
+name: Build Windows & Android Installers
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    name: Build Windows (.exe)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install web dependencies
+        run: npm install
+
+      - name: Build web bundle
+        run: npm run build
+
+      - name: Install Electron & Builder
+        run: npm install --no-save electron@33 electron-builder@25
+
+      - name: Package Windows .exe installers
+        run: npx electron-builder --win nsis portable --config electron-builder.json
+
+      - name: Upload Windows Installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: PSC-Exam-Studio-Windows-EXE
+          path: release/*.exe
+
+  build-android:
+    name: Build Android (.apk)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Setup Java 17 (Android SDK)
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Install web dependencies
+        run: npm install
+
+      - name: Build web bundle
+        run: npm run build
+
+      - name: Install Capacitor & Generate Android Project
+        run: |
+          npm install --no-save @capacitor/core@6 @capacitor/cli@6 @capacitor/android@6
+          npx cap add android
+          npx cap sync android
+
+      - name: Build Android APK
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+      - name: Upload Android APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: PSC-Exam-Studio-Android-APK
+          path: android/app/build/outputs/apk/debug/app-debug.apk
