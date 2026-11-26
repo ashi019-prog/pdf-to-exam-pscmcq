@@ -45,6 +45,14 @@ export interface PdfTextExtractionResult {
   averageOcrConfidence?: number;
   questionImages?: Record<number, string>;
   questionTables?: Record<number, QuestionTableData>;
+  bookletAlphaCode?: OptionKey;
+}
+
+export interface MultiBookletAnswerKeyResult {
+  byBooklet: Partial<Record<OptionKey, Record<number, OptionKey>>>;
+  isMultiBooklet: boolean;
+  detectedBooklets: OptionKey[];
+  fallbackSingleKey: Record<number, OptionKey>;
 }
 
 export interface PositionedTextItem {
@@ -167,6 +175,47 @@ export function classifyPageTextEncoding(text: string): PageEncodingKind {
 export function isLikelyLegacyNonUnicodeFont(text: string): boolean {
   const kind = classifyPageTextEncoding(text);
   return kind === 'shree_mal' || kind === 'unsupported_legacy_font';
+}
+
+export function detectBookletAlphaCodeFromPage1(
+  rawItems: RawPdfTextItem[],
+  pageHeight: number,
+  rawDigitalText: string
+): OptionKey | undefined {
+  const labelMatch = rawDigitalText.match(
+    /(?:question\s+booklet\s+alpha\s+code|booklet\s+alpha\s+code|alpha\s+code|booklet\s+code|ചോദ്യ\s*പുസ്തക\s*അക്ഷര\s*കോഡ്)\s*[:\-]?\s*\(?([A-D])\)?/i
+  );
+  if (labelMatch) {
+    return labelMatch[1].toUpperCase() as OptionKey;
+  }
+
+  let bestCandidate: { code: OptionKey; fontSize: number } | null = null;
+  for (const item of rawItems) {
+    const str = (item.str ?? '').trim();
+    if (!/^[A-D]$/.test(str)) continue;
+    const yPdf = item.transform ? item.transform[5] : 0;
+    const fontSize = item.transform
+      ? Math.max(Math.abs(item.transform[0]), Math.abs(item.transform[3]))
+      : 0;
+    const topFromTop = pageHeight - yPdf;
+    if (topFromTop <= pageHeight * 0.48 && fontSize >= 15) {
+      if (!bestCandidate || fontSize > bestCandidate.fontSize) {
+        bestCandidate = { code: str as OptionKey, fontSize };
+      }
+    }
+  }
+  if (bestCandidate) {
+    return bestCandidate.code;
+  }
+
+  const headerMatch = rawDigitalText.match(
+    /(?:^|\n)\s*\d{1,4}\/\d{2,4}-[A-Z](?:\s+\d{1,3})?\s+([A-D])(?:\s|$)/im
+  );
+  if (headerMatch) {
+    return headerMatch[1].toUpperCase() as OptionKey;
+  }
+
+  return undefined;
 }
 
 function isBlankOrRoughWorkPage(digitalText: string): boolean {
@@ -992,6 +1041,7 @@ export async function extractTextFromPdf(
 
   const questionImages: Record<number, string> = {};
   const questionTables: Record<number, QuestionTableData> = {};
+  let bookletAlphaCode: OptionKey | undefined;
   const pageResults: Array<{
     pageNum: number;
     text: string;
@@ -1016,6 +1066,10 @@ export async function extractTextFromPdf(
     const content = await page.getTextContent();
     const rawItems = content.items as RawPdfTextItem[];
     const rawDigital = reconstructPageText(rawItems, viewport.width);
+
+    if (!bookletAlphaCode && pageNum <= 3) {
+      bookletAlphaCode = detectBookletAlphaCodeFromPage1(rawItems, viewport.height, rawDigital);
+    }
 
     if (!forceOcr) {
       if (isBlankOrRoughWorkPage(rawDigital)) {
@@ -1199,6 +1253,7 @@ export async function extractTextFromPdf(
     averageOcrConfidence,
     questionImages,
     questionTables,
+    bookletAlphaCode,
   };
 }
 
@@ -1485,11 +1540,8 @@ export function computeQuestionWarnings(
   return warnings;
 }
 
-export function parseAnswerKeyFromText(rawText: string): Record<number, OptionKey> {
+function parseSingleBookletAnswerKey(normalized: string): Record<number, OptionKey> {
   const keyMap: Record<number, OptionKey> = {};
-  const normalized = normalizeMalayalamDigits(rawText)
-    .replace(/\r\n/g, '\n')
-    .replace(/\r/g, '\n');
 
   const explicitPairRegex =
     /(?:^|[\s|,;])(?:(?:Q(?:uestion)?|ചോദ്യം)\.?\s*)?(\d{1,3})\s*[.):\-–—=]\s*\(?([A-Da-d1-4]|അ|ആ|ഇ|ഈ|എ|ബി|സി|ഡി)\)?(?=$|[\s|,;.)])/gi;
@@ -1515,6 +1567,148 @@ export function parseAnswerKeyFromText(rawText: string): Record<number, OptionKe
   }
 
   return keyMap;
+}
+
+export function parseMultiBookletAnswerKey(rawText: string): MultiBookletAnswerKeyResult {
+  const normalized = normalizeMalayalamDigits(rawText)
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n');
+
+  const byBooklet: Record<OptionKey, Record<number, OptionKey>> = {
+    A: {},
+    B: {},
+    C: {},
+    D: {},
+  };
+
+  // Format 1: Tabular 4-booklet rows "<qNum> <ansA> <ansB> <ansC> <ansD>"
+  const fourColRowRegex =
+    /(?:^|[\s|])(\d{1,3})[.)]?\s+\(?([A-Da-dX*\-]|DEL(?:ETED)?)\)?\s+\(?([A-Da-dX*\-]|DEL(?:ETED)?)\)?\s+\(?([A-Da-dX*\-]|DEL(?:ETED)?)\)?\s+\(?([A-Da-dX*\-]|DEL(?:ETED)?)\)?(?=$|[\s|])/gi;
+
+  let fourColCount = 0;
+  let m: RegExpExecArray | null;
+  while ((m = fourColRowRegex.exec(normalized)) !== null) {
+    const qNum = parseInt(m[1], 10);
+    if (Number.isNaN(qNum) || qNum <= 0 || qNum > 300) continue;
+    fourColCount += 1;
+    const cols: OptionKey[] = ['A', 'B', 'C', 'D'];
+    for (let idx = 0; idx < 4; idx += 1) {
+      const opt = normalizeOptionKey(m[idx + 2]);
+      if (opt) {
+        byBooklet[cols[idx]][qNum] = opt;
+      }
+    }
+  }
+
+  if (fourColCount >= 5) {
+    const detectedBooklets = OPTION_KEYS.filter((k) => Object.keys(byBooklet[k]).length > 0);
+    return {
+      byBooklet,
+      isMultiBooklet: detectedBooklets.length >= 2,
+      detectedBooklets,
+      fallbackSingleKey: byBooklet.A,
+    };
+  }
+
+  // Format 2: 8-column paired rows "1 B 1 C 1 A 1 D"
+  const paired4Regex =
+    /(?:^|\n)\s*(\d{1,3})[.)]?\s+\(?([A-Da-dX*\-])\)?\s+(\d{1,3})[.)]?\s+\(?([A-Da-dX*\-])\)?\s+(\d{1,3})[.)]?\s+\(?([A-Da-dX*\-])\)?\s+(\d{1,3})[.)]?\s+\(?([A-Da-dX*\-])\)?\s*(?=$|\n)/gi;
+
+  let pairedCount = 0;
+  const pairedMap: Record<OptionKey, Record<number, OptionKey>> = { A: {}, B: {}, C: {}, D: {} };
+  while ((m = paired4Regex.exec(normalized)) !== null) {
+    const q1 = parseInt(m[1], 10);
+    const q2 = parseInt(m[3], 10);
+    const q3 = parseInt(m[5], 10);
+    const q4 = parseInt(m[7], 10);
+    if (q1 === q2 && q2 === q3 && q3 === q4 && q1 > 0 && q1 <= 300) {
+      pairedCount += 1;
+      const oA = normalizeOptionKey(m[2]);
+      const oB = normalizeOptionKey(m[4]);
+      const oC = normalizeOptionKey(m[6]);
+      const oD = normalizeOptionKey(m[8]);
+      if (oA) pairedMap.A[q1] = oA;
+      if (oB) pairedMap.B[q1] = oB;
+      if (oC) pairedMap.C[q1] = oC;
+      if (oD) pairedMap.D[q1] = oD;
+    }
+  }
+
+  if (pairedCount >= 5) {
+    const detectedBooklets = OPTION_KEYS.filter((k) => Object.keys(pairedMap[k]).length > 0);
+    return {
+      byBooklet: pairedMap,
+      isMultiBooklet: detectedBooklets.length >= 2,
+      detectedBooklets,
+      fallbackSingleKey: pairedMap.A,
+    };
+  }
+
+  // Format 3: Sectioned multi-booklet key ("ALPHA CODE : A ... ALPHA CODE : B ...")
+  const sectionRegex =
+    /(?:question\s+booklet\s+)?(?:alpha\s+code|booklet\s+code|series|set|ചോദ്യ\s*പുസ്തക\s*അക്ഷര\s*കോഡ്)\s*[:\-]?\s*\(?([A-D])\)?/gi;
+  const sectionStarts: Array<{ code: OptionKey; index: number; bodyStart: number }> = [];
+  while ((m = sectionRegex.exec(normalized)) !== null) {
+    sectionStarts.push({
+      code: m[1].toUpperCase() as OptionKey,
+      index: m.index,
+      bodyStart: m.index + m[0].length,
+    });
+  }
+
+  const uniqueCodes = new Set(sectionStarts.map((s) => s.code));
+  if (uniqueCodes.size >= 2) {
+    const sectionedMap: Partial<Record<OptionKey, Record<number, OptionKey>>> = {};
+    for (let i = 0; i < sectionStarts.length; i += 1) {
+      const cur = sectionStarts[i];
+      const next = sectionStarts[i + 1];
+      const chunk = normalized.slice(cur.bodyStart, next ? next.index : normalized.length);
+      const parsedChunk = parseSingleBookletAnswerKey(chunk);
+      if (Object.keys(parsedChunk).length > 0) {
+        sectionedMap[cur.code] = {
+          ...(sectionedMap[cur.code] ?? {}),
+          ...parsedChunk,
+        };
+      }
+    }
+    const detectedBooklets = OPTION_KEYS.filter(
+      (k) => sectionedMap[k] && Object.keys(sectionedMap[k] as Record<number, OptionKey>).length > 0
+    );
+    if (detectedBooklets.length >= 2) {
+      return {
+        byBooklet: sectionedMap,
+        isMultiBooklet: true,
+        detectedBooklets,
+        fallbackSingleKey:
+          (sectionedMap.A as Record<number, OptionKey> | undefined) ??
+          (sectionedMap[detectedBooklets[0]] as Record<number, OptionKey>),
+      };
+    }
+  }
+
+  // Format 4: Single-booklet fallback
+  const single = parseSingleBookletAnswerKey(normalized);
+  return {
+    byBooklet: {},
+    isMultiBooklet: false,
+    detectedBooklets: [],
+    fallbackSingleKey: single,
+  };
+}
+
+export function parseAnswerKeyFromText(
+  rawText: string,
+  bookletCode?: OptionKey | null
+): Record<number, OptionKey> {
+  const multi = parseMultiBookletAnswerKey(rawText);
+  if (multi.isMultiBooklet) {
+    const targetCode: OptionKey = bookletCode ?? 'A';
+    const matched = multi.byBooklet[targetCode];
+    if (matched && Object.keys(matched).length > 0) {
+      return matched;
+    }
+  }
+  return multi.fallbackSingleKey;
 }
 
 export function mergeQuestionsWithAnswerKey(
