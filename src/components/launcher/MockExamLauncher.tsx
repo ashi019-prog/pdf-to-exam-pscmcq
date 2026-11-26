@@ -51,8 +51,11 @@ export const MockExamLauncher: React.FC<MockExamLauncherProps> = ({
   );
 
   useEffect(() => {
-    if (selectedHead && selectedHead.importedPapers.length > 0 && !selectedPaperId) {
-      setSelectedPaperId(selectedHead.importedPapers[0].paperId);
+    if (selectedHead && selectedHead.importedPapers.length > 0) {
+      const exists = selectedHead.importedPapers.some((p) => p.paperId === selectedPaperId);
+      if (!exists) {
+        setSelectedPaperId(selectedHead.importedPapers[0].paperId);
+      }
     }
   }, [selectedHead, selectedPaperId]);
 
@@ -87,6 +90,8 @@ export const MockExamLauncher: React.FC<MockExamLauncherProps> = ({
       explanation: q.explanation,
       imageDataUrl: q.imageDataUrl,
       table: q.table,
+      sourceQuestionId: q.id,
+      paperLabel: q.paperLabel,
       warnings: [],
     }));
 
@@ -94,6 +99,7 @@ export const MockExamLauncher: React.FC<MockExamLauncherProps> = ({
       {
         version: 1,
         savedAt: session.createdAt,
+        examHeadId: session.examHeadId,
         settings: {
           title: session.examName,
           globalDurationMinutes: session.durationMinutes,
