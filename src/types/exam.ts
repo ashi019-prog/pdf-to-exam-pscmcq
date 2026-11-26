@@ -20,6 +20,13 @@ export interface ParseWarning {
   message: string;
 }
 
+export interface QuestionTableData {
+  headers: string[];
+  rows: string[][];
+  introText?: string;
+  outroText?: string;
+}
+
 export interface ExamQuestion {
   number: number;
   text: string;
@@ -27,6 +34,7 @@ export interface ExamQuestion {
   correctOption: OptionKey | null;
   explanation?: string;
   imageDataUrl?: string;
+  table?: QuestionTableData;
   warnings: ParseWarning[];
   ocrConfidence?: number;
 }
@@ -93,6 +101,7 @@ export interface QuestionReviewItem {
   correctOption: OptionKey | null;
   explanation?: string;
   imageDataUrl?: string;
+  table?: QuestionTableData;
   outcome: ReviewOutcome;
   marksAwarded: number;
   timeSpentSeconds: number;
