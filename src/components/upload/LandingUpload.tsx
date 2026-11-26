@@ -83,7 +83,8 @@ export const LandingUpload: React.FC = () => {
       const extracted = parseQuestionsFromText(
         result.text,
         result.averageOcrConfidence,
-        result.questionImages
+        result.questionImages,
+        result.questionTables
       );
 
       if (extracted.length === 0) {
@@ -172,6 +173,7 @@ export const LandingUpload: React.FC = () => {
   return (
     <div className="min-h-screen bg-slate-50 px-4 py-10 sm:px-6 lg:px-8">
       <div className="mx-auto max-w-4xl">
+        {/* Hero */}
         <div className="text-center">
           <div className="inline-flex items-center gap-2 rounded-full border border-indigo-200 bg-indigo-50 px-3 py-1 text-xs font-semibold text-indigo-700">
             <ShieldCheck className="h-3.5 w-3.5" />
@@ -187,6 +189,7 @@ export const LandingUpload: React.FC = () => {
           </p>
         </div>
 
+        {/* Language & OCR Bar */}
         <div className="mt-6 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-indigo-100 bg-white px-4 py-3 shadow-sm">
           <div className="flex items-center gap-2 text-xs font-semibold text-slate-700">
             <Languages className="h-4 w-4 text-indigo-600" />
@@ -209,14 +212,15 @@ export const LandingUpload: React.FC = () => {
               onChange={(e) => setForceOcr(e.target.checked)}
               className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
             />
-            <span>Force OCR (use only for scanned image PDFs)</span>
+            <span>Force OCR (use if Malayalam PDF text looks garbled)</span>
           </label>
         </div>
 
+        {/* Dual PDF Dropzones */}
         <div className="mt-5 grid gap-5 sm:grid-cols-2">
           <PdfDropzone
             title="1. Question Paper PDF"
-            subtitle="Automatically skips page 1–2 instructions, aligns A–D choices, and keeps tables/math."
+            subtitle="Automatically skips page 1–2 instructions and aligns A–D choices."
             fileName={questionFileName}
             statusMessage={questionStatus}
             progress={questionProgress}
@@ -236,6 +240,7 @@ export const LandingUpload: React.FC = () => {
           />
         </div>
 
+        {/* Exam Configuration Card */}
         <div className="mt-6 rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
           <div className="flex items-center gap-2 text-sm font-semibold text-slate-800">
             <Clock className="h-4 w-4 text-indigo-600" />
@@ -299,6 +304,7 @@ export const LandingUpload: React.FC = () => {
           </div>
         </div>
 
+        {/* Action Bar */}
         <div className="mt-6 flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-wrap items-center gap-2.5">
             <button
@@ -343,6 +349,7 @@ export const LandingUpload: React.FC = () => {
           <p className="mt-3 text-xs font-medium text-rose-600">{savedExamError}</p>
         )}
 
+        {/* Recent Solo Practice History */}
         {attemptHistory.length > 0 && (
           <div className="mt-10 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
             <div className="flex items-center justify-between">
@@ -395,6 +402,7 @@ export const LandingUpload: React.FC = () => {
           </div>
         )}
 
+        {/* Scoring Rule Footer */}
         <div className="mt-8 flex flex-wrap items-center justify-center gap-4 text-xs text-slate-500">
           <span>
             Confirmed Correct: <strong className="text-emerald-700">+1</strong>
