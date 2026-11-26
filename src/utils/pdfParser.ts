@@ -1,6 +1,7 @@
 import * as pdfjsLib from 'pdfjs-dist';
 import { createWorker } from 'tesseract.js';
 import { ExamQuestion, OPTION_KEYS, OptionKey, ParseWarning } from '../types/exam';
+import { convertShreeMalToUnicode } from './shreeMalConverter';
 
 if (typeof window !== 'undefined' && pdfjsLib.GlobalWorkerOptions) {
   pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
@@ -309,7 +310,13 @@ export async function extractTextFromPdf(
       if (rawDigital.trim().length < MIN_DIGITAL_CHARS_PER_PAGE) {
         pageResults.push({ pageNum, text: '', needsOcr: true, reason: 'scanned' });
       } else if (isLikelyLegacyNonUnicodeFont(rawDigital)) {
-        pageResults.push({ pageNum, text: '', needsOcr: true, reason: 'legacy_font' });
+        const cleaned = stripPageHeadersAndFooters(rawDigital);
+        const converted = convertShreeMalToUnicode(cleaned);
+        pageResults.push({
+          pageNum,
+          text: converted,
+          needsOcr: false,
+        });
       } else {
         pageResults.push({
           pageNum,
