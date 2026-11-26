@@ -255,6 +255,7 @@ export const UploadCreateTab: React.FC<UploadCreateTabProps> = ({
       const result = await extractTextFromPdf(file, setKeyProgress, {
         ocrLanguage,
         forceOcr,
+        isAnswerKey: true,
       });
 
       const multiResult = parseMultiBookletAnswerKey(result.text);
