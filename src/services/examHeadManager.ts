@@ -15,6 +15,9 @@ function generateId(): string {
   return `q-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+/**
+ * Normalizes any stored ExamHead JSON (including earlier ExamHeadFile format) into the unified ExamHead schema.
+ */
 function normalizeStoredExamHead(raw: unknown): ExamHead | null {
   if (!raw || typeof raw !== 'object') return null;
   const obj = raw as Record<string, unknown>;
@@ -111,12 +114,14 @@ export interface ExamHeadStorageAdapter {
   readRaw: (id: string) => Promise<unknown | null>;
   writeRaw: (id: string, data: ExamHead) => Promise<void>;
   listRaw: () => Promise<unknown[]>;
+  deleteRaw?: (id: string) => Promise<void>;
 }
 
 const defaultAdapter: ExamHeadStorageAdapter = {
   readRaw: (id) => localFolderStorage.readExamHeadRaw(id),
   writeRaw: (id, data) => localFolderStorage.writeExamHeadRaw(id, data),
   listRaw: () => localFolderStorage.listExamHeadsRaw(),
+  deleteRaw: (id) => localFolderStorage.deleteExamHead(id),
 };
 
 export async function listExamHeads(
@@ -139,6 +144,9 @@ export async function getExamHead(
   return normalizeStoredExamHead(raw);
 }
 
+/**
+ * Creates a new Exam Head JSON file in exam-heads/. Blocks accidental overwrites of an existing Exam Head.
+ */
 export async function createExamHead(
   name: string,
   adapter: ExamHeadStorageAdapter = defaultAdapter
@@ -174,6 +182,11 @@ export interface AppendPaperMetaInput {
   duplicatesRemoved: number;
 }
 
+/**
+ * Strictly non-destructive append: loads existing ExamHead, preserves every existing question,
+ * validates all incoming options A–D and embedded correctOption, assigns sequential poolNumber,
+ * verifies merged count, and writes atomically.
+ */
 export async function appendPaperToExamHead(
   examHeadId: string,
   verifiedQuestions: IncomingVerifiedQuestion[],
@@ -357,4 +370,13 @@ export async function updateQuestionStatsAfterExam(
   };
 
   await adapter.writeRaw(existing.id, updated);
+}
+
+export async function deleteExamHead(
+  examHeadId: string,
+  adapter: ExamHeadStorageAdapter = defaultAdapter
+): Promise<void> {
+  if (adapter.deleteRaw) {
+    await adapter.deleteRaw(examHeadId);
+  }
 }
