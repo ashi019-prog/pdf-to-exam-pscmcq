@@ -46,7 +46,6 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({
 
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm sm:p-8">
-      {/* Question Header Row */}
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-4">
         <div className="flex items-center gap-2.5">
           <span className="inline-flex h-8 min-w-[2.5rem] items-center justify-center rounded-lg bg-indigo-600 px-2.5 text-sm font-bold text-white">
@@ -66,12 +65,20 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({
         </span>
       </div>
 
-      {/* Question Stem with whitespace-pre-wrap & readable math typography */}
-      <div className="mt-5 whitespace-pre-wrap break-words text-base font-medium leading-relaxed tracking-normal text-slate-900 sm:text-lg">
-        {question.text}
-      </div>
+      {question.imageDataUrl ? (
+        <div className="mt-5 overflow-hidden rounded-xl border border-slate-200 bg-white p-2">
+          <img
+            src={question.imageDataUrl}
+            alt={`Question ${question.number} diagram or table`}
+            className="mx-auto h-auto max-w-full"
+          />
+        </div>
+      ) : (
+        <div className="mt-5 whitespace-pre-wrap break-words text-base font-medium leading-relaxed tracking-normal text-slate-900 sm:text-lg">
+          {question.text}
+        </div>
+      )}
 
-      {/* Option Cards */}
       <div className="mt-6 space-y-3">
         {OPTION_KEYS.map((key, idx) => {
           const isSelected = selected === key;
