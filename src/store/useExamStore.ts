@@ -20,6 +20,13 @@ interface SlateCanvasState {
   redoStack: SlateStroke[];
 }
 
+interface NewQuestionInput {
+  number?: number;
+  text: string;
+  options: Record<OptionKey, string>;
+  correctOption: OptionKey | null;
+}
+
 interface ExamStoreState {
   phase: AppPhase;
   settings: ExamSettings;
@@ -43,8 +50,11 @@ interface ExamStoreState {
   updateSettings: (partial: Partial<ExamSettings>) => void;
   setQuestions: (questions: ExamQuestion[]) => void;
   updateQuestion: (questionNumber: number, updated: Partial<ExamQuestion>) => void;
+  updateQuestionAt: (index: number, updated: Partial<ExamQuestion>) => void;
   addBlankQuestion: () => void;
+  addCustomQuestion: (input: NewQuestionInput) => void;
   deleteQuestion: (questionNumber: number) => void;
+  deleteQuestionAt: (index: number) => void;
   loadSampleExam: () => void;
   loadSavedExamPackage: (pkg: SavedExamPackage, shuffle: boolean) => void;
 
@@ -172,6 +182,25 @@ export const useExamStore = create<ExamStoreState>()(
           }),
         })),
 
+      updateQuestionAt: (index, updated) =>
+        set((state) => ({
+          questions: state.questions.map((q, idx) => {
+            if (idx !== index) return q;
+            const merged: ExamQuestion = {
+              ...q,
+              ...updated,
+              options: updated.options ? { ...q.options, ...updated.options } : q.options,
+            };
+            merged.warnings = computeQuestionWarnings(
+              merged.text,
+              merged.options,
+              merged.correctOption,
+              merged.ocrConfidence
+            );
+            return merged;
+          }),
+        })),
+
       addBlankQuestion: () =>
         set((state) => {
           const maxNum = state.questions.reduce((max, q) => Math.max(max, q.number), 0);
@@ -186,9 +215,39 @@ export const useExamStore = create<ExamStoreState>()(
           return { questions: [...state.questions, blank] };
         }),
 
+      addCustomQuestion: (input) =>
+        set((state) => {
+          const maxNum = state.questions.reduce((max, q) => Math.max(max, q.number), 0);
+          const targetNum =
+            typeof input.number === 'number' && input.number > 0 ? input.number : maxNum + 1;
+          const newQ: ExamQuestion = {
+            number: targetNum,
+            text: input.text.trim(),
+            options: {
+              A: input.options.A.trim(),
+              B: input.options.B.trim(),
+              C: input.options.C.trim(),
+              D: input.options.D.trim(),
+            },
+            correctOption: input.correctOption,
+            warnings: computeQuestionWarnings(
+              input.text.trim(),
+              input.options,
+              input.correctOption
+            ),
+          };
+          const combined = [...state.questions, newQ].sort((a, b) => a.number - b.number);
+          return { questions: combined };
+        }),
+
       deleteQuestion: (questionNumber) =>
         set((state) => ({
           questions: state.questions.filter((q) => q.number !== questionNumber),
+        })),
+
+      deleteQuestionAt: (index) =>
+        set((state) => ({
+          questions: state.questions.filter((_, idx) => idx !== index),
         })),
 
       loadSampleExam: () =>
@@ -223,10 +282,15 @@ export const useExamStore = create<ExamStoreState>()(
       startExam: () => {
         const { questions, settings } = get();
         if (questions.length === 0) return;
+        const normalized = questions.map((q, idx) => ({
+          ...q,
+          number: idx + 1,
+        }));
         set({
           phase: 'exam',
+          questions: normalized,
           currentIndex: 0,
-          responses: createInitialResponses(questions),
+          responses: createInitialResponses(normalized),
           globalRemainingSeconds: Math.max(1, settings.globalDurationMinutes) * 60,
           totalTimeUsedSeconds: 0,
           examFinishedAt: null,
