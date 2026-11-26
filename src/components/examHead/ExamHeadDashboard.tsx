@@ -8,23 +8,29 @@ import {
   ChevronUp,
   Trash2,
   X,
+  Share2,
+  Upload,
 } from 'lucide-react';
 import { ExamHead } from '../../types/examHead';
 import { deleteQuestionFromExamHead, listExamHeads } from '../../services/examHeadManager';
 import { localFolderStorage } from '../../services/localFolderStorage';
+import { ExportShareModal } from '../sharing/ExportShareModal';
 
 interface ExamHeadDashboardProps {
   onLaunchMock: (examHeadId: string) => void;
   onAddAnotherPaper: (examHead: ExamHead) => void;
+  onOpenImportModal?: () => void;
 }
 
 export const ExamHeadDashboard: React.FC<ExamHeadDashboardProps> = ({
   onLaunchMock,
   onAddAnotherPaper,
+  onOpenImportModal,
 }) => {
   const [examHeads, setExamHeads] = useState<ExamHead[]>([]);
   const [expandedPapers, setExpandedPapers] = useState<Record<string, boolean>>({});
   const [browsingHead, setBrowsingHead] = useState<ExamHead | null>(null);
+  const [sharingHead, setSharingHead] = useState<ExamHead | null>(null);
 
   const refresh = async () => {
     try {
@@ -66,9 +72,21 @@ export const ExamHeadDashboard: React.FC<ExamHeadDashboardProps> = ({
             Exam Head Question Banks ({examHeads.length})
           </h2>
         </div>
-        <span className="text-xs text-slate-500">
-          Unified multi-paper pools • Embedded answer keys
-        </span>
+        <div className="flex items-center gap-2">
+          <span className="hidden text-xs text-slate-500 sm:inline">
+            Unified multi-paper pools • Embedded answer keys
+          </span>
+          {onOpenImportModal && (
+            <button
+              type="button"
+              onClick={onOpenImportModal}
+              className="inline-flex items-center gap-1 rounded-lg border border-indigo-200 bg-indigo-50 px-2.5 py-1 text-xs font-semibold text-indigo-700 hover:bg-indigo-100"
+            >
+              <Upload className="h-3.5 w-3.5" />
+              Import Exam File
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="mt-4 grid gap-4 sm:grid-cols-2">
@@ -155,6 +173,15 @@ export const ExamHeadDashboard: React.FC<ExamHeadDashboardProps> = ({
                 </button>
                 <button
                   type="button"
+                  disabled={head.questions.length === 0}
+                  onClick={() => setSharingHead(head)}
+                  className="inline-flex items-center gap-1 rounded-lg border border-sky-200 bg-sky-50 px-2.5 py-1.5 text-xs font-semibold text-sky-800 hover:bg-sky-100 disabled:opacity-40"
+                >
+                  <Share2 className="h-3.5 w-3.5" />
+                  Share / Export
+                </button>
+                <button
+                  type="button"
                   onClick={() => setBrowsingHead(head)}
                   className="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100"
                 >
@@ -228,6 +255,12 @@ export const ExamHeadDashboard: React.FC<ExamHeadDashboardProps> = ({
           </div>
         </div>
       )}
+
+      <ExportShareModal
+        open={sharingHead !== null}
+        examHead={sharingHead}
+        onClose={() => setSharingHead(null)}
+      />
     </section>
   );
 };
