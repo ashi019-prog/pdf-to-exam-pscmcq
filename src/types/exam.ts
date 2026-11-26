@@ -26,6 +26,7 @@ export interface ExamQuestion {
   options: Record<OptionKey, string>;
   correctOption: OptionKey | null;
   explanation?: string;
+  imageDataUrl?: string;
   warnings: ParseWarning[];
   ocrConfidence?: number;
 }
@@ -91,6 +92,7 @@ export interface QuestionReviewItem {
   confirmedOption: OptionKey | null;
   correctOption: OptionKey | null;
   explanation?: string;
+  imageDataUrl?: string;
   outcome: ReviewOutcome;
   marksAwarded: number;
   timeSpentSeconds: number;
