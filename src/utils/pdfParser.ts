@@ -1,6 +1,12 @@
 import * as pdfjsLib from 'pdfjs-dist';
 import { createWorker } from 'tesseract.js';
-import { ExamQuestion, OPTION_KEYS, OptionKey, ParseWarning } from '../types/exam';
+import {
+  ExamQuestion,
+  OPTION_KEYS,
+  OptionKey,
+  ParseWarning,
+  QuestionTableData,
+} from '../types/exam';
 import { convertShreeMalToUnicode } from './shreeMalConverter';
 
 if (typeof window !== 'undefined' && pdfjsLib.GlobalWorkerOptions) {
@@ -33,6 +39,7 @@ export interface PdfTextExtractionResult {
   ocrReason?: 'scanned' | 'legacy_font' | 'forced';
   averageOcrConfidence?: number;
   questionImages?: Record<number, string>;
+  questionTables?: Record<number, QuestionTableData>;
 }
 
 export interface PositionedTextItem {
@@ -270,6 +277,220 @@ function preprocessCanvasForOcr(canvas: HTMLCanvasElement): void {
   ctx.putImageData(imageData, 0, 0);
 }
 
+/**
+ * Reconstructs structured HTML tables (e.g., Q36 & Q37 in Kerala PSC papers) directly
+ * from PDF text item (x, y) coordinates, merging multi-line left cells with right-column values.
+ */
+function extractQuestionTablesFromPage(
+  rawItems: Array<{ str?: string; transform?: number[]; width?: number }>,
+  isLegacyShreeMal: boolean
+): Record<number, QuestionTableData> {
+  const tables: Record<number, QuestionTableData> = {};
+
+  interface WordItem {
+    x: number;
+    endX: number;
+    y: number;
+    text: string;
+  }
+
+  interface LineGroup {
+    y: number;
+    minX: number;
+    words: WordItem[];
+    fullText: string;
+  }
+
+  const lines: LineGroup[] = [];
+  for (const item of rawItems) {
+    const text = (item.str ?? '').trim();
+    if (!text) continue;
+    const x = item.transform ? item.transform[4] : 0;
+    const y = item.transform ? item.transform[5] : 0;
+    const width = item.width ?? text.length * 5;
+
+    let line = lines.find((l) => Math.abs(l.y - y) < 4);
+    if (!line) {
+      line = { y, minX: x, words: [], fullText: '' };
+      lines.push(line);
+    }
+    line.words.push({ x, endX: x + width, y, text });
+    line.minX = Math.min(line.minX, x);
+  }
+
+  lines.sort((a, b) => b.y - a.y);
+  for (const l of lines) {
+    l.words.sort((a, b) => a.x - b.x);
+    l.fullText = l.words.map((w) => w.text).join(' ').replace(/\s+/g, ' ').trim();
+  }
+
+  const formatCell = (raw: string) => {
+    const cleaned = raw.replace(/\s+/g, ' ').trim();
+    return isLegacyShreeMal ? convertShreeMalToUnicode(cleaned) : cleaned;
+  };
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const qMatch = lines[i].fullText.match(/^(\d{1,3})\.(?:\s*(.*))?$/);
+    if (!qMatch || lines[i].minX > 120) continue;
+    const qNum = parseInt(qMatch[1], 10);
+    if (Number.isNaN(qNum) || qNum <= 0) continue;
+
+    // Collect all lines belonging to this question's stem (before A) or next question)
+    const regionLines: LineGroup[] = [];
+    const firstStemRemainder = (qMatch[2] ?? '').trim();
+    if (firstStemRemainder) {
+      regionLines.push({
+        ...lines[i],
+        words: lines[i].words.slice(1),
+        fullText: firstStemRemainder,
+      });
+    }
+
+    for (let j = i + 1; j < lines.length; j += 1) {
+      if (lines[j].minX <= 120 && /^\d{1,3}\./.test(lines[j].fullText)) break;
+      if (/^A\)/.test(lines[j].fullText)) break;
+      regionLines.push(lines[j]);
+    }
+
+    // Find the first table row starting with "i."
+    const firstRowIdx = regionLines.findIndex((l) => /^i\.\s+/.test(l.fullText));
+    if (firstRowIdx === -1) continue;
+
+    // Look for a 2-column header line right above "i." with a clear horizontal gap (>= 25px)
+    const headerIdx = firstRowIdx - 1;
+    let headers: string[] = ['Column 1', 'Column 2'];
+    let hasHeaderGap = false;
+    let splitX = 220;
+    let tableStartIdx = firstRowIdx;
+
+    if (headerIdx >= 0) {
+      const hWords = regionLines[headerIdx].words;
+      let maxGap = 0;
+      let splitWordIdx = -1;
+      for (let k = 1; k < hWords.length; k += 1) {
+        const gap = hWords[k].x - hWords[k - 1].endX;
+        if (gap > maxGap) {
+          maxGap = gap;
+          splitWordIdx = k;
+        }
+      }
+      if (splitWordIdx !== -1 && maxGap >= 25) {
+        const leftHeader = hWords
+          .slice(0, splitWordIdx)
+          .map((w) => w.text)
+          .join(' ');
+        const rightHeader = hWords
+          .slice(splitWordIdx)
+          .map((w) => w.text)
+          .join(' ');
+        headers = [formatCell(leftHeader), formatCell(rightHeader)];
+        splitX = Math.min(hWords[splitWordIdx].x - 18, 290);
+        tableStartIdx = headerIdx;
+        hasHeaderGap = true;
+      }
+    }
+
+    // Verify genuine 2-column structure (avoids turning normal i./ii./iii. statement lists into tables)
+    const bodyLines = regionLines.slice(firstRowIdx);
+    let rightColumnMarkerCount = 0;
+    let bodyGapSplitX: number | null = null;
+
+    for (const l of bodyLines) {
+      const pWord = l.words.find(
+        (w) => /^(?:P|Q|R|S|a|b|c|d|1|2|3|4)\.?$/.test(w.text) && w.x >= 180
+      );
+      if (pWord) {
+        rightColumnMarkerCount += 1;
+        bodyGapSplitX =
+          bodyGapSplitX === null ? pWord.x - 10 : Math.min(bodyGapSplitX, pWord.x - 10);
+      } else {
+        for (let k = 1; k < l.words.length; k += 1) {
+          if (l.words[k].x - l.words[k - 1].endX >= 35 && l.words[k].x >= 180) {
+            rightColumnMarkerCount += 1;
+            bodyGapSplitX =
+              bodyGapSplitX === null
+                ? l.words[k].x - 10
+                : Math.min(bodyGapSplitX, l.words[k].x - 10);
+            break;
+          }
+        }
+      }
+    }
+
+    // Must have either a 2-column header gap or at least 2 body rows with a distinct right column
+    if (!hasHeaderGap && rightColumnMarkerCount < 2) continue;
+
+    if (bodyGapSplitX !== null) {
+      splitX = hasHeaderGap ? Math.min(splitX, bodyGapSplitX) : bodyGapSplitX;
+    }
+
+    const hasRightColumn = bodyLines.some((l) => l.words.some((w) => w.x >= splitX));
+    if (!hasRightColumn) continue;
+
+    const rows: string[][] = [];
+    let tableEndIdx = regionLines.length;
+
+    for (let idx = firstRowIdx; idx < regionLines.length; idx += 1) {
+      const line = regionLines[idx];
+      const isRowStart = /^(?:i|ii|iii|iv|v)\.\s+/.test(line.fullText);
+
+      // Detect start of outro text below the table (normal left margin x <= 94, not a roman numeral)
+      if (!isRowStart && line.minX <= 94 && rows.length >= 2) {
+        tableEndIdx = idx;
+        break;
+      }
+
+      const leftPart = line.words
+        .filter((w) => w.x < splitX)
+        .map((w) => w.text)
+        .join(' ')
+        .trim();
+      const rightPart = line.words
+        .filter((w) => w.x >= splitX)
+        .map((w) => w.text)
+        .join(' ')
+        .trim();
+
+      if (isRowStart) {
+        rows.push([formatCell(leftPart), formatCell(rightPart)]);
+      } else if (rows.length > 0) {
+        const curRow = rows[rows.length - 1];
+        if (leftPart) {
+          curRow[0] = `${curRow[0]} ${formatCell(leftPart)}`.trim();
+        }
+        if (rightPart) {
+          curRow[1] = `${curRow[1]} ${formatCell(rightPart)}`.trim();
+        }
+      }
+    }
+
+    if (rows.length >= 2) {
+      const introRaw = regionLines
+        .slice(0, tableStartIdx)
+        .map((l) => l.fullText)
+        .join(' ')
+        .trim();
+      const outroRaw = regionLines
+        .slice(tableEndIdx)
+        .map((l) => l.fullText)
+        .join(' ')
+        .trim();
+
+      tables[qNum] = {
+        headers,
+        rows,
+        introText: introRaw ? formatCell(introRaw) : undefined,
+        outroText: outroRaw ? formatCell(outroRaw) : undefined,
+      };
+    }
+  }
+
+  return tables;
+}
+
+/**
+ * Crops high-resolution PNG snapshots for stacked visual math equations (e.g., Q74).
+ */
 async function extractVisualQuestionSnapshots(
   page: pdfjsLib.PDFPageProxy,
   rawItems: Array<{ str?: string; transform?: number[]; width?: number }>
@@ -299,7 +520,6 @@ async function extractVisualQuestionSnapshots(
     qNum: number;
     topPdfY: number;
     bottomPdfY: number;
-    needsSnapshot: boolean;
   }> = [];
 
   for (let i = 0; i < lines.length; i += 1) {
@@ -308,8 +528,8 @@ async function extractVisualQuestionSnapshots(
     const qNum = parseInt(m[1], 10);
     if (Number.isNaN(qNum) || qNum <= 0) continue;
 
-    const topPdfY = lines[i].y + 18;
-    let bottomPdfY = Math.max(40, lines[i].y - 120);
+    const topPdfY = lines[i].y + 22;
+    let bottomPdfY = Math.max(40, lines[i].y - 100);
     let regionText = lines[i].text;
 
     for (let j = i + 1; j < lines.length; j += 1) {
@@ -326,12 +546,8 @@ async function extractVisualQuestionSnapshots(
     }
 
     const hasStackedMath = /[∑∫√]/.test(regionText);
-    const hasTableStructure =
-      /(?:^|\n)\s*i\.\s+.*\bP\.?\b/m.test(regionText) &&
-      /(?:^|\n)\s*ii\.\s+.*\bQ\.?\b/m.test(regionText);
-
-    if (hasStackedMath || hasTableStructure) {
-      qRegions.push({ qNum, topPdfY, bottomPdfY, needsSnapshot: true });
+    if (hasStackedMath) {
+      qRegions.push({ qNum, topPdfY, bottomPdfY });
     }
   }
 
@@ -395,6 +611,7 @@ export async function extractTextFromPdf(
   const totalPages = pdf.numPages;
 
   const questionImages: Record<number, string> = {};
+  const questionTables: Record<number, QuestionTableData> = {};
   const pageResults: Array<{
     pageNum: number;
     text: string;
@@ -429,12 +646,19 @@ export async function extractTextFromPdf(
       if (rawDigital.trim().length < MIN_DIGITAL_CHARS_PER_PAGE) {
         pageResults.push({ pageNum, text: '', needsOcr: true, reason: 'scanned' });
       } else {
+        const isLegacy = isLikelyLegacyNonUnicodeFont(rawDigital);
+
+        // Recreate exact structured tables (e.g., Q36, Q37) from PDF coordinates
+        const pageTables = extractQuestionTablesFromPage(rawItems, isLegacy);
+        Object.assign(questionTables, pageTables);
+
+        // Capture exact visual snapshots for stacked math fractions (e.g., Q74)
         if (typeof document !== 'undefined') {
           const pageSnaps = await extractVisualQuestionSnapshots(page, rawItems);
           Object.assign(questionImages, pageSnaps);
         }
 
-        if (isLikelyLegacyNonUnicodeFont(rawDigital)) {
+        if (isLegacy) {
           const cleaned = stripPageHeadersAndFooters(rawDigital);
           const converted = convertShreeMalToUnicode(cleaned);
           pageResults.push({
@@ -534,6 +758,7 @@ export async function extractTextFromPdf(
     ocrReason,
     averageOcrConfidence,
     questionImages,
+    questionTables,
   };
 }
 
@@ -641,7 +866,8 @@ function findSequentialOptions(blockBody: string): SequentialOptionMatch[] {
 export function parseQuestionsFromText(
   rawText: string,
   ocrConfidence?: number,
-  questionImages?: Record<number, string>
+  questionImages?: Record<number, string>,
+  questionTables?: Record<number, QuestionTableData>
 ): ExamQuestion[] {
   const cleanedRaw = stripPageHeadersAndFooters(normalizeMalayalamDigits(rawText))
     .replace(/\r\n/g, '\n')
@@ -713,7 +939,8 @@ export function parseQuestionsFromText(
       current.number,
       blockBody,
       ocrConfidence,
-      questionImages?.[current.number]
+      questionImages?.[current.number],
+      questionTables?.[current.number]
     );
 
     if (looksLikeInstructionBlock(blockBody, optionCount) && results.length === 0) {
@@ -730,7 +957,8 @@ function parseQuestionBlock(
   questionNumber: number,
   blockBody: string,
   ocrConfidence?: number,
-  imageDataUrl?: string
+  imageDataUrl?: string,
+  table?: QuestionTableData
 ): { question: ExamQuestion; optionCount: number } {
   const options: Record<OptionKey, string> = { A: '', B: '', C: '', D: '' };
   const optionMatches = findSequentialOptions(blockBody);
@@ -766,6 +994,7 @@ function parseQuestionBlock(
       options,
       correctOption: null,
       imageDataUrl,
+      table,
       warnings,
       ocrConfidence,
     },
