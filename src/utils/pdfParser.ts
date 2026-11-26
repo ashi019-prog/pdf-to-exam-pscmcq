@@ -58,6 +58,7 @@ interface RawPdfTextItem {
   str?: string;
   transform?: number[];
   width?: number;
+  fontName?: string;
 }
 
 interface OcrWordBox {
@@ -248,6 +249,55 @@ function joinOcrWordsInReadingOrder(words: OcrWordBox[], scale: number): string 
     .join('\n');
 }
 
+function mergeCleanDigitalAndOcrWords(
+  digitalBoxes: OcrWordBox[],
+  ocrBoxes: OcrWordBox[],
+  scale: number
+): string {
+  if (digitalBoxes.length === 0) {
+    return joinOcrWordsInReadingOrder(ocrBoxes, scale);
+  }
+
+  const keptOcr: OcrWordBox[] = [];
+
+  for (const w of ocrBoxes) {
+    const wWidth = Math.max(1, w.bbox.x1 - w.bbox.x0);
+    const wHeight = Math.max(1, w.bbox.y1 - w.bbox.y0);
+    let coveredX = 0;
+
+    for (const d of digitalBoxes) {
+      const yOverlap = Math.min(w.bbox.y1, d.bbox.y1) - Math.max(w.bbox.y0, d.bbox.y0);
+      if (yOverlap < Math.min(wHeight, d.bbox.y1 - d.bbox.y0) * 0.25) continue;
+
+      const xOverlap =
+        Math.min(w.bbox.x1 + 2 * scale, d.bbox.x1 + 2 * scale) -
+        Math.max(w.bbox.x0 - 2 * scale, d.bbox.x0 - 2 * scale);
+      if (xOverlap > 0) {
+        coveredX += xOverlap;
+      }
+    }
+
+    const overlapRatio = Math.min(1, coveredX / wWidth);
+    const hasMalayalam = /[\u0D00-\u0D7F]/.test(w.text);
+
+    if ((!hasMalayalam && overlapRatio >= 0.45) || (hasMalayalam && overlapRatio >= 0.6)) {
+      continue;
+    }
+
+    if (hasMalayalam && overlapRatio >= 0.2) {
+      const trimmed = w.text.replace(/^[0-9A-Za-z().]+(?=[-\u0D00-\u0D7F])/, '').trim();
+      if (trimmed) {
+        keptOcr.push({ text: trimmed, bbox: w.bbox });
+      }
+      continue;
+    }
+
+    keptOcr.push(w);
+  }
+
+  return joinOcrWordsInReadingOrder([...digitalBoxes, ...keptOcr], scale);
+}
+
 function reconstructOcrPageWithPdfAnchors(
   rawItems: RawPdfTextItem[],
   pageHeight: number,
@@ -256,15 +306,35 @@ function reconstructOcrPageWithPdfAnchors(
 ): string | null {
   if (rawItems.length === 0 || ocrWords.length === 0) return null;
 
+  const fontTexts = new Map<string, string>();
+  for (const item of rawItems) {
+    const fn = item.fontName ?? '';
+    const str = item.str ?? '';
+    if (!fn || !str) continue;
+    fontTexts.set(fn, (fontTexts.get(fn) ?? '') + str);
+  }
+
+  const cleanFontNames = new Set<string>();
+  fontTexts.forEach((txt, fn) => {
+    if (countGarbledLegacyChars(txt) === 0 && /[A-Z0-9]/.test(txt)) {
+      cleanFontNames.add(fn);
+    }
+  });
+
   interface MergedToken {
     text: string;
     x0: number;
     x1: number;
     yPdf: number;
     heightPdf: number;
+    isCleanDigital: boolean;
   }
 
-  const pdfLines: Array<{ y: number; items: Array<{ x: number; endX: number; h: number; str: string }> }> = [];
+  const pdfLines: Array<{
+    y: number;
+    items: Array<{ x: number; endX: number; h: number; str: string; isClean: boolean }>;
+  }> = [];
+
   for (const item of rawItems) {
     const str = (item.str ?? '').trim();
     if (!str) continue;
@@ -274,13 +344,14 @@ function reconstructOcrPageWithPdfAnchors(
       ? Math.max(8, Math.abs(item.transform[3]) || Math.abs(item.transform[0]) || 11)
       : 11;
     const width = item.width && item.width > 0 ? item.width : str.length * 5.5;
+    const isClean = Boolean(item.fontName && cleanFontNames.has(item.fontName));
 
     let line = pdfLines.find((l) => Math.abs(l.y - y) < 4);
     if (!line) {
       line = { y, items: [] };
       pdfLines.push(line);
     }
-    line.items.push({ x, endX: x + width, h, str });
+    line.items.push({ x, endX: x + width, h, str, isClean });
   }
 
   const tokens: MergedToken[] = [];
@@ -288,7 +359,7 @@ function reconstructOcrPageWithPdfAnchors(
     line.items.sort((a, b) => a.x - b.x);
     let cur: MergedToken | null = null;
     for (const part of line.items) {
-      if (cur && part.x - cur.x1 <= 3.5) {
+      if (cur && part.x - cur.x1 <= 3.5 && cur.isCleanDigital === part.isClean) {
         cur.text += part.str;
         cur.x1 = Math.max(cur.x1, part.endX);
         cur.heightPdf = Math.max(cur.heightPdf, part.h);
@@ -300,6 +371,7 @@ function reconstructOcrPageWithPdfAnchors(
           x1: part.endX,
           yPdf: line.y,
           heightPdf: part.h,
+          isCleanDigital: part.isClean,
         };
       }
     }
@@ -324,6 +396,7 @@ function reconstructOcrPageWithPdfAnchors(
 
   const qAnchors: QAnchor[] = [];
   const optAnchors: OptAnchor[] = [];
+  const cleanDigitalBoxes: OcrWordBox[] = [];
 
   for (const tok of tokens) {
     if (tok.yPdf < 55) continue;
@@ -348,6 +421,14 @@ function reconstructOcrPageWithPdfAnchors(
     if (optMatch) {
       const key = (optMatch[1] || optMatch[2]) as OptionKey;
       optAnchors.push({ key, px0, px1, pyTop, pyBottom });
+      continue;
+    }
+
+    if (tok.isCleanDigital && countGarbledLegacyChars(t) === 0) {
+      cleanDigitalBoxes.push({
+        text: t,
+        bbox: { x0: px0, y0: pyTop, x1: px1, y1: pyBottom },
+      });
     }
   }
 
@@ -385,20 +466,28 @@ function reconstructOcrPageWithPdfAnchors(
     }
 
     const stemBottom = optRows[0].minTop - 5 * scale;
-    const stemWords: OcrWordBox[] = [];
-    const optionWords: Record<OptionKey, OcrWordBox[]> = { A: [], B: [], C: [], D: [] };
+    const stemOcr: OcrWordBox[] = [];
+    const stemDigital: OcrWordBox[] = [];
+    const optionOcr: Record<OptionKey, OcrWordBox[]> = { A: [], B: [], C: [], D: [] };
+    const optionDigital: Record<OptionKey, OcrWordBox[]> = { A: [], B: [], C: [], D: [] };
 
-    for (const w of ocrWords) {
-      const cx = (w.bbox.x0 + w.bbox.x1) / 2;
-      const cy = (w.bbox.y0 + w.bbox.y1) / 2;
-      if (cy < qTop || cy >= qBottom) continue;
+    const assignBox = (
+      box: OcrWordBox,
+      targetStem: OcrWordBox[],
+      targetOpt: Record<OptionKey, OcrWordBox[]>,
+      skipQNum: boolean
+    ) => {
+      const cx = (box.bbox.x0 + box.bbox.x1) / 2;
+      const cy = (box.bbox.y0 + box.bbox.y1) / 2;
+      if (cy < qTop || cy >= qBottom) return;
 
       if (cy < stemBottom) {
-        const isQNumBox = w.bbox.x1 <= q.px1 + 5 * scale && cy <= q.pyBottom + 6 * scale;
-        if (!isQNumBox) {
-          stemWords.push(w);
+        if (skipQNum) {
+          const isQNumBox = box.bbox.x1 <= q.px1 + 5 * scale && cy <= q.pyBottom + 6 * scale;
+          if (isQNumBox) return;
         }
-        continue;
+        targetStem.push(box);
+        return;
       }
 
       let matchedRowIdx = -1;
@@ -410,7 +499,7 @@ function reconstructOcrPageWithPdfAnchors(
           break;
         }
       }
-      if (matchedRowIdx === -1) continue;
+      if (matchedRowIdx === -1) return;
 
       const rowItems = optRows[matchedRowIdx].items;
       for (let c = 0; c < rowItems.length; c += 1) {
@@ -419,16 +508,27 @@ function reconstructOcrPageWithPdfAnchors(
         const minX = opt.px1 + 1.5 * scale;
         const maxX = nextOpt ? nextOpt.px0 - 3 * scale : Number.POSITIVE_INFINITY;
         if (cx >= minX && cx < maxX) {
-          optionWords[opt.key].push(w);
-          break;
+          targetOpt[opt.key].push(box);
+          return;
         }
       }
+    };
+
+    for (const d of cleanDigitalBoxes) {
+      assignBox(d, stemDigital, optionDigital, false);
+    }
+    for (const w of ocrWords) {
+      assignBox(w, stemOcr, optionOcr, true);
     }
 
-    const stemText = joinOcrWordsInReadingOrder(stemWords, scale);
+    const stemText = mergeCleanDigitalAndOcrWords(stemDigital, stemOcr, scale);
     const linesOut = [`${q.num}. ${stemText}`.trim()];
     for (const key of OPTION_KEYS) {
-      const optText = joinOcrWordsInReadingOrder(optionWords[key], scale).replace(/\n+/g, ' ');
+      const optText = mergeCleanDigitalAndOcrWords(
+        optionDigital[key],
+        optionOcr[key],
+        scale
+      ).replace(/\n+/g, ' ');
       if (optText) {
         linesOut.push(`${key}) ${optText}`);
       }
