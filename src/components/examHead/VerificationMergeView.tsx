@@ -10,7 +10,7 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
-import { ExamQuestion, OPTION_KEYS } from '../../types/exam';
+import { ExamQuestion, OPTION_KEYS, OptionKey } from '../../types/exam';
 import { DuplicateMatch, ExamHead, IncomingVerifiedQuestion } from '../../types/examHead';
 import { detectDuplicates } from '../../utils/duplicateDetector';
 import {
@@ -30,6 +30,8 @@ interface VerificationMergeViewProps {
   onCancel?: () => void;
 }
 
+type ViewFilter = 'duplicates' | 'missing-answers' | 'all';
+
 export const VerificationMergeView: React.FC<VerificationMergeViewProps> = ({
   initialQuestions,
   defaultPaperLabel,
@@ -44,7 +46,7 @@ export const VerificationMergeView: React.FC<VerificationMergeViewProps> = ({
   const [creatingNew, setCreatingNew] = useState<boolean>(Boolean(initialCreatingNew));
   const [newHeadName, setNewHeadName] = useState<string>(initialNewHeadName ?? '');
   const [paperLabel, setPaperLabel] = useState<string>(defaultPaperLabel);
-  const [showAllQuestions, setShowAllQuestions] = useState<boolean>(false);
+  const [viewFilter, setViewFilter] = useState<ViewFilter>('duplicates');
 
   const [incoming, setIncoming] = useState<IncomingVerifiedQuestion[]>(() =>
     initialQuestions.map((q, idx) => ({
@@ -107,7 +109,6 @@ export const VerificationMergeView: React.FC<VerificationMergeViewProps> = ({
     [examHeads, selectedHeadId]
   );
 
-  // Automatically detect duplicates against the selected Exam Head and within the same PDF
   const duplicateMap: Record<string, DuplicateMatch> = useMemo(() => {
     const existingPool = creatingNew || !selectedHead ? [] : selectedHead.questions;
     return detectDuplicates(incoming, existingPool);
@@ -117,6 +118,18 @@ export const VerificationMergeView: React.FC<VerificationMergeViewProps> = ({
     () => Object.keys(duplicateMap).filter((tempId) => !ignoredDuplicates[tempId]),
     [duplicateMap, ignoredDuplicates]
   );
+
+  const missingAnswerQuestions = useMemo(
+    () => incoming.filter((q) => q.correctOption === null),
+    [incoming]
+  );
+
+  // If there are no duplicates but some answers are missing, auto-switch to Missing Answers view
+  useEffect(() => {
+    if (viewFilter === 'duplicates' && activeFlaggedIds.length === 0 && missingAnswerQuestions.length > 0) {
+      setViewFilter('missing-answers');
+    }
+  }, [activeFlaggedIds.length, missingAnswerQuestions.length, viewFilter]);
 
   const keyedIncoming = useMemo(
     () =>
@@ -129,7 +142,6 @@ export const VerificationMergeView: React.FC<VerificationMergeViewProps> = ({
     [incoming]
   );
 
-  const unkeyedOrIncompleteCount = incoming.length - keyedIncoming.length;
   const parsedCount = initialQuestions.length;
   const duplicatesRemovedCount = Math.max(0, parsedCount - incoming.length);
   const readyCount = keyedIncoming.length;
@@ -137,9 +149,12 @@ export const VerificationMergeView: React.FC<VerificationMergeViewProps> = ({
   const projectedTotal = existingCount + readyCount;
 
   const visibleQuestions = useMemo(() => {
-    if (showAllQuestions) return incoming;
+    if (viewFilter === 'all') return incoming;
+    if (viewFilter === 'missing-answers') {
+      return incoming.filter((q) => q.correctOption === null);
+    }
     return incoming.filter((q) => Boolean(duplicateMap[q.tempId] && !ignoredDuplicates[q.tempId]));
-  }, [incoming, duplicateMap, ignoredDuplicates, showAllQuestions]);
+  }, [incoming, duplicateMap, ignoredDuplicates, viewFilter]);
 
   const handleRemoveAllFlagged = () => {
     const flaggedSet = new Set(activeFlaggedIds);
@@ -192,7 +207,7 @@ export const VerificationMergeView: React.FC<VerificationMergeViewProps> = ({
     setError(null);
     if (keyedIncoming.length === 0) {
       setError(
-        'No questions with auto-fetched answers are ready to append. Please make sure the Answer Key PDF was uploaded in Step 1.'
+        'No questions with answers are ready to append. Select answers for the missing questions below or upload the Answer Key PDF.'
       );
       return;
     }
@@ -317,33 +332,50 @@ export const VerificationMergeView: React.FC<VerificationMergeViewProps> = ({
         </div>
 
         <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
-          <div className="flex flex-wrap items-center gap-4 text-xs font-semibold">
-            <span className="text-slate-700">
-              Parsed: <strong className="text-slate-900">{parsedCount}</strong>
-            </span>
-            <span className="text-emerald-700">
-              Auto-Keyed Ready: <strong>{readyCount}</strong>
-            </span>
-            <span className={activeFlaggedIds.length > 0 ? 'text-amber-700' : 'text-emerald-700'}>
-              Flagged Duplicates: <strong>{activeFlaggedIds.length}</strong>
-            </span>
-            {unkeyedOrIncompleteCount > 0 && (
-              <span className="text-slate-500">
-                Cancelled / Skipped: <strong>{unkeyedOrIncompleteCount}</strong>
-              </span>
-            )}
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2 text-xs font-semibold">
             <button
               type="button"
-              onClick={() => setShowAllQuestions((prev) => !prev)}
-              className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+              onClick={() => setViewFilter('duplicates')}
+              className={`rounded-lg px-3 py-1.5 transition ${
+                viewFilter === 'duplicates'
+                  ? 'bg-slate-900 text-white'
+                  : 'border border-slate-200 bg-white text-slate-700 hover:bg-slate-100'
+              }`}
             >
-              {showAllQuestions
-                ? `Show Duplicates Only (${activeFlaggedIds.length})`
-                : `Inspect All (${incoming.length})`}
+              Duplicates ({activeFlaggedIds.length})
             </button>
+
+            {missingAnswerQuestions.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setViewFilter('missing-answers')}
+                className={`rounded-lg px-3 py-1.5 transition ${
+                  viewFilter === 'missing-answers'
+                    ? 'bg-amber-600 text-white'
+                    : 'border border-amber-300 bg-amber-50 text-amber-900 hover:bg-amber-100'
+                }`}
+              >
+                Missing Answers ({missingAnswerQuestions.length})
+              </button>
+            )}
+
+            <button
+              type="button"
+              onClick={() => setViewFilter('all')}
+              className={`rounded-lg px-3 py-1.5 transition ${
+                viewFilter === 'all'
+                  ? 'bg-slate-900 text-white'
+                  : 'border border-slate-200 bg-white text-slate-700 hover:bg-slate-100'
+              }`}
+            >
+              All Questions ({incoming.length})
+            </button>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-3 text-xs font-semibold">
+            <span className="text-emerald-700">
+              Ready to Save: <strong>{readyCount}</strong> / {incoming.length}
+            </span>
 
             {activeFlaggedIds.length > 0 && (
               <button
@@ -357,6 +389,17 @@ export const VerificationMergeView: React.FC<VerificationMergeViewProps> = ({
             )}
           </div>
         </div>
+
+        {missingAnswerQuestions.length > 0 && (
+          <div className="mt-3 flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-900">
+            <AlertTriangle className="h-4 w-4 shrink-0 text-amber-600" />
+            <span>
+              {missingAnswerQuestions.length} question
+              {missingAnswerQuestions.length === 1 ? '' : 's'} did not match an answer from the
+              Answer Key PDF. You can select their answers manually below before appending.
+            </span>
+          </div>
+        )}
 
         {error && (
           <div className="mt-3 flex items-center gap-2 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-medium text-rose-700">
@@ -380,7 +423,7 @@ export const VerificationMergeView: React.FC<VerificationMergeViewProps> = ({
         </div>
       </div>
 
-      {!showAllQuestions && activeFlaggedIds.length === 0 ? (
+      {viewFilter === 'duplicates' && activeFlaggedIds.length === 0 && missingAnswerQuestions.length === 0 ? (
         <div className="rounded-2xl border border-emerald-200 bg-emerald-50/70 p-6 text-center">
           <CheckCircle2 className="mx-auto h-9 w-9 text-emerald-600" />
           <h3 className="mt-2 text-sm font-bold text-emerald-950">
@@ -398,6 +441,7 @@ export const VerificationMergeView: React.FC<VerificationMergeViewProps> = ({
             const dup = duplicateMap[q.tempId];
             const isFlagged = Boolean(dup && !ignoredDuplicates[q.tempId]);
             const isExpanded = Boolean(expandedCompare[q.tempId]);
+            const isMissingAns = q.correctOption === null;
 
             return (
               <div
@@ -407,6 +451,8 @@ export const VerificationMergeView: React.FC<VerificationMergeViewProps> = ({
                     ? dup.matchType === 'exact'
                       ? 'border-rose-300 ring-1 ring-rose-200'
                       : 'border-amber-300 ring-1 ring-amber-200'
+                    : isMissingAns
+                    ? 'border-amber-300 ring-1 ring-amber-100'
                     : 'border-slate-200'
                 }`}
               >
@@ -440,15 +486,40 @@ export const VerificationMergeView: React.FC<VerificationMergeViewProps> = ({
                       </span>
                     )}
 
-                    <span
-                      className={`rounded-full px-2.5 py-0.5 text-xs font-bold ${
-                        q.correctOption
-                          ? 'bg-emerald-100 text-emerald-800'
-                          : 'bg-slate-100 text-slate-500'
-                      }`}
-                    >
-                      {q.correctOption ? `Key: ${q.correctOption}` : 'Key: Cancelled / Unmatched'}
-                    </span>
+                    {isMissingAns ? (
+                      <select
+                        value=""
+                        onChange={(e) =>
+                          handleUpdateIncoming(q.tempId, {
+                            correctOption: (e.target.value || null) as OptionKey | null,
+                          })
+                        }
+                        className="rounded-lg border border-amber-400 bg-amber-50 px-2.5 py-1 text-xs font-bold text-amber-900 focus:border-indigo-500 focus:outline-none"
+                      >
+                        <option value="">Select Answer (A–D)</option>
+                        {OPTION_KEYS.map((key) => (
+                          <option key={key} value={key}>
+                            Answer: {key}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <select
+                        value={q.correctOption ?? ''}
+                        onChange={(e) =>
+                          handleUpdateIncoming(q.tempId, {
+                            correctOption: (e.target.value || null) as OptionKey | null,
+                          })
+                        }
+                        className="rounded-lg border border-emerald-300 bg-emerald-50 px-2.5 py-1 text-xs font-bold text-emerald-900 focus:border-indigo-500 focus:outline-none"
+                      >
+                        {OPTION_KEYS.map((key) => (
+                          <option key={key} value={key}>
+                            Key: {key}
+                          </option>
+                        ))}
+                      </select>
+                    )}
                   </div>
 
                   <div className="flex flex-wrap items-center gap-2">
