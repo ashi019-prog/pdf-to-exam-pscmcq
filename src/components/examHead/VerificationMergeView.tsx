@@ -342,7 +342,40 @@ export const VerificationMergeView: React.FC<VerificationMergeViewProps> = ({
             >
               {showAllQuestions
                 ? `Show Duplicates Only (${activeFlaggedIds.length})`
-                : `Inspect All (${incoming.length})`} </button>  {activeFlaggedIds.length > 0 && ( <button type="button" onClick={handleRemoveAllFlagged} className="inline-flex items-center gap-1.5 rounded-lg bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-rose-700" > <Trash2 className="h-3.5 w-3.5" /> Remove All Flagged Duplicates ({activeFlaggedIds.length}) </button> )} </div> </div>  {error && ( <div className="mt-3 flex items-center gap-2 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-medium text-rose-700"> <AlertTriangle className="h-4 w-4 shrink-0" /> <span>{error}</span> </div> )}  <div className="mt-4 flex justify-end"> <button type="button" disabled={saving \vert{}\vert{} readyCount === 0} onClick={handleAppend} className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:bg-slate-300" > <Save className="h-4 w-4" /> {saving ? 'Appending...' : `Append ${readyCount} Questions to ${targetDisplayName} (New Total:${projectedTotal})`}
+                : `Inspect All (${incoming.length})`}
+            </button>
+
+            {activeFlaggedIds.length > 0 && (
+              <button
+                type="button"
+                onClick={handleRemoveAllFlagged}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-rose-700"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+                Remove All Flagged Duplicates ({activeFlaggedIds.length})
+              </button>
+            )}
+          </div>
+        </div>
+
+        {error && (
+          <div className="mt-3 flex items-center gap-2 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-medium text-rose-700">
+            <AlertTriangle className="h-4 w-4 shrink-0" />
+            <span>{error}</span>
+          </div>
+        )}
+
+        <div className="mt-4 flex justify-end">
+          <button
+            type="button"
+            disabled={saving || readyCount === 0}
+            onClick={handleAppend}
+            className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:bg-slate-300"
+          >
+            <Save className="h-4 w-4" />
+            {saving
+              ? 'Appending...'
+              : `Append ${readyCount} Questions to ${targetDisplayName} (New Total: ${projectedTotal})`}
           </button>
         </div>
       </div>
@@ -385,7 +418,18 @@ export const VerificationMergeView: React.FC<VerificationMergeViewProps> = ({
 
                     {isFlagged && dup ? (
                       <span
-                        className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-semibold ${ dup.matchType === 'exact' ? 'bg-rose-100 text-rose-800' : 'bg-amber-100 text-amber-800' }`} > <AlertTriangle className="h-3.5 w-3.5" /> {dup.matchType === 'exact' ? 'Exact Duplicate' : dup.matchType === 'intra-batch' ? 'Duplicate in Same PDF' : `${Math.round(dup.similarityScore * 100)}% Similar`}{' '}
+                        className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-semibold ${
+                          dup.matchType === 'exact'
+                            ? 'bg-rose-100 text-rose-800'
+                            : 'bg-amber-100 text-amber-800'
+                        }`}
+                      >
+                        <AlertTriangle className="h-3.5 w-3.5" />
+                        {dup.matchType === 'exact'
+                          ? 'Exact Duplicate'
+                          : dup.matchType === 'intra-batch'
+                          ? 'Duplicate in Same PDF'
+                          : `${Math.round(dup.similarityScore * 100)}% Similar`}{' '}
                         • {dup.matchedExistingQuestion.paperLabel} (Q
                         {dup.matchedExistingQuestion.poolNumber})
                       </span>
@@ -397,7 +441,13 @@ export const VerificationMergeView: React.FC<VerificationMergeViewProps> = ({
                     )}
 
                     <span
-                      className={`rounded-full px-2.5 py-0.5 text-xs font-bold ${ q.correctOption ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-500' }`} > {q.correctOption ? `Key: ${q.correctOption}` : 'Key: Cancelled / Unmatched'}
+                      className={`rounded-full px-2.5 py-0.5 text-xs font-bold ${
+                        q.correctOption
+                          ? 'bg-emerald-100 text-emerald-800'
+                          : 'bg-slate-100 text-slate-500'
+                      }`}
+                    >
+                      {q.correctOption ? `Key: ${q.correctOption}` : 'Key: Cancelled / Unmatched'}
                     </span>
                   </div>
 
@@ -474,184 +524,32 @@ export const VerificationMergeView: React.FC<VerificationMergeViewProps> = ({
                   {OPTION_KEYS.map((key) => (
                     <div key={key} className="flex items-center gap-2">
                       <span
-                        className={`flex h-6 w-6 shrink-0 items-center justify-center rounded text-xs font-bold ${ q.correctOption === key ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-700' }`} > {key} </span> <input type="text" value={q.options[key]} onChange={(e) => handleUpdateIncoming(q.tempId, { options: { ...q.options, [key]: e.target.value }, }) } className="w-full rounded-lg border border-slate-200 px-2.5 py-1 text-xs text-slate-900 focus:border-indigo-500 focus:outline-none" /> </div> ))} </div> </div> ); })} </div> )} </div> ); }; ```  ### 2. `src/components/tabs/UploadCreateTab.tsx` (UPDATE — replace entire file) ```tsx import React, { useEffect, useMemo, useRef, useState } from 'react'; import { AlertTriangle, ArrowRight, CheckCircle2, ChevronDown, ChevronUp, FileJson, FileText, Languages, Share2, Shuffle, Sparkles, Upload, } from 'lucide-react'; import { ExamQuestion, OPTION_KEYS, OptionKey } from '../../types/exam'; import { ExamHead } from '../../types/examHead'; import { ImportAnalysisPreview } from '../../types/sharePackage'; import { DetectedLanguage, extractTextFromPdf, mergeQuestionsWithAnswerKey, MultiBookletAnswerKeyResult, OcrLanguageOption, parseMultiBookletAnswerKey, parseQuestionsFromText, PdfExtractionProgress, } from '../../utils/pdfParser'; import { SAMPLE_EXAM_QUESTIONS, SAMPLE_EXAM_TITLE } from '../../data/sampleExam'; import { analyzeImportAgainstExisting, commitImportedPackage, parseAndValidateImportFile, } from '../../services/examImportService'; import { PdfDropzone } from '../upload/PdfDropzone'; import { VerificationMergeView } from '../examHead/VerificationMergeView';  interface UploadCreateTabProps { examHeads: ExamHead[]; preselectedExamHeadId?: string \vert{} null; onDataChanged: () => void; onLaunchMock: (examHeadId: string) => void; onShareExamHead: (examHead: ExamHead, defaultMode: 'full' \vert{} 'update') => void; }  type CreateMode = 'pdf' \vert{} 'import-json'; type PdfStep = 'setup' \vert{} 'verify' \vert{} 'confirmed';  function formatLanguageLabel(lang: DetectedLanguage): string { switch (lang) { case 'malayalam': return 'Malayalam (മലയാളം)'; case 'bilingual': return 'Malayalam + English'; case 'english': return 'English'; default: return 'Unknown'; } }  function selectAnswerKeyForBooklet( multiKey: MultiBookletAnswerKeyResult \vert{} null, bookletCode: OptionKey ): Record<number, OptionKey> { if (!multiKey) return {}; if (multiKey.isMultiBooklet) { const matched = multiKey.byBooklet[bookletCode]; if (matched && Object.keys(matched).length > 0) { return matched; } } return multiKey.fallbackSingleKey; }  export const UploadCreateTab: React.FC<UploadCreateTabProps> = ({ examHeads, preselectedExamHeadId, onDataChanged, onLaunchMock, onShareExamHead, }) => { const [mode, setMode] = useState<CreateMode>('pdf'); const [step, setStep] = useState<PdfStep>('setup');  const [targetType, setTargetType] = useState<'existing' \vert{} 'new'>( examHeads.length > 0 ? 'existing' : 'new' ); const [selectedHeadId, setSelectedHeadId] = useState<string>( preselectedExamHeadId \vert{}\vert{} (examHeads.length > 0 ? examHeads[0].id : '') ); const [newHeadName, setNewHeadName] = useState<string>(''); const [paperLabel, setPaperLabel] = useState<string>('');  const [ocrLanguage, setOcrLanguage] = useState<OcrLanguageOption>('mal+eng'); const [forceOcr, setForceOcr] = useState<boolean>(false); const [bookletCode, setBookletCode] = useState<OptionKey>('A'); const [autoDetectedBooklet, setAutoDetectedBooklet] = useState<OptionKey \vert{} null>(null);  const [questionFileName, setQuestionFileName] = useState<string \vert{} null>(null); const [questionProgress, setQuestionProgress] = useState<PdfExtractionProgress \vert{} null>(null); const [questionStatus, setQuestionStatus] = useState<string \vert{} null>(null); const [questionError, setQuestionError] = useState<string \vert{} null>(null); const [isParsingQuestions, setIsParsingQuestions] = useState<boolean>(false);  const [keyFileName, setKeyFileName] = useState<string \vert{} null>(null); const [keyProgress, setKeyProgress] = useState<PdfExtractionProgress \vert{} null>(null); const [keyStatus, setKeyStatus] = useState<string \vert{} null>(null); const [keyError, setKeyError] = useState<string \vert{} null>(null); const [isParsingKey, setIsParsingKey] = useState<boolean>(false);  const [parsedQuestions, setParsedQuestions] = useState<ExamQuestion[]>([]); const [multiBookletKey, setMultiBookletKey] = useState<MultiBookletAnswerKeyResult \vert{} null>(null); const [parsedAnswerKey, setParsedAnswerKey] = useState<Record<number, OptionKey>>({});  // Always auto-merge fetched Answer Key with parsed Questions regardless of upload order const mergedQuestions = useMemo(() => { const activeKey = multiBookletKey ? selectAnswerKeyForBooklet(multiBookletKey, bookletCode) : parsedAnswerKey; if (Object.keys(activeKey).length === 0) return parsedQuestions; return mergeQuestionsWithAnswerKey(parsedQuestions, activeKey); }, [parsedQuestions, multiBookletKey, bookletCode, parsedAnswerKey]);  const matchedAnswerCount = useMemo( () => mergedQuestions.filter((q) => q.correctOption !== null).length, [mergedQuestions] );  const [savedSummary, setSavedSummary] = useState<{ examHead: ExamHead; addedCount: number; } \vert{} null>(null);  const jsonInputRef = useRef<HTMLInputElement \vert{} null>(null); const [jsonDragging, setJsonDragging] = useState<boolean>(false); const [jsonError, setJsonError] = useState<string \vert{} null>(null); const [jsonPreview, setJsonPreview] = useState<ImportAnalysisPreview \vert{} null>(null); const [jsonTargetMode, setJsonTargetMode] = useState<'merge-existing' \vert{} 'create-new'>( 'merge-existing' ); const [jsonCustomName, setJsonCustomName] = useState<string>(''); const [jsonExcludedIds, setJsonExcludedIds] = useState<Record<string, boolean>>({}); const [jsonShowNearDupes, setJsonShowNearDupes] = useState<boolean>(false); const [jsonImporting, setJsonImporting] = useState<boolean>(false); const [jsonSuccess, setJsonSuccess] = useState<{ examHead: ExamHead; addedCount: number; skippedDuplicates: number; } \vert{} null>(null);  useEffect(() => { if (preselectedExamHeadId && examHeads.some((h) => h.id === preselectedExamHeadId)) { setTargetType('existing'); setSelectedHeadId(preselectedExamHeadId); } else if (examHeads.length > 0 && !selectedHeadId) { setSelectedHeadId(examHeads[0].id); } else if (examHeads.length === 0) { setTargetType('new'); } }, [preselectedExamHeadId, examHeads, selectedHeadId]);  const applyBookletCode = ( nextCode: OptionKey, multiKeyOverride?: MultiBookletAnswerKeyResult \vert{} null ) => { setBookletCode(nextCode); const activeMulti = multiKeyOverride !== undefined ? multiKeyOverride : multiBookletKey; if (activeMulti) { const selectedKey = selectAnswerKeyForBooklet(activeMulti, nextCode); setParsedAnswerKey(selectedKey); const count = Object.keys(selectedKey).length; if (parsedQuestions.length > 0) { setParsedQuestions((prev) => mergeQuestionsWithAnswerKey(prev, selectedKey)); } if (activeMulti.isMultiBooklet) { setKeyStatus( `Matched ${count} answers for Booklet ${nextCode} (${activeMulti.detectedBooklets.join('/')} booklets detected).`
-        );
-      }
-    }
-  };
-
-  const handleQuestionPdf = async (file: File) => {
-    setQuestionFileName(file.name);
-    setQuestionError(null);
-    setQuestionStatus(null);
-    setIsParsingQuestions(true);
-
-    try {
-      const result = await extractTextFromPdf(file, setQuestionProgress, {
-        ocrLanguage,
-        forceOcr,
-      });
-
-      const detectedCode = result.bookletAlphaCode ?? null;
-      const effectiveBooklet: OptionKey = detectedCode ?? bookletCode;
-      if (detectedCode) {
-        setAutoDetectedBooklet(detectedCode);
-        setBookletCode(detectedCode);
-      }
-
-      const activeKey = multiBookletKey
-        ? selectAnswerKeyForBooklet(multiBookletKey, effectiveBooklet)
-        : parsedAnswerKey;
-      if (multiBookletKey) {
-        setParsedAnswerKey(activeKey);
-        if (multiBookletKey.isMultiBooklet) {
-          setKeyStatus(
-            `Matched ${Object.keys(activeKey).length} answers for Booklet ${effectiveBooklet} (${multiBookletKey.detectedBooklets.join('/')} booklets detected).`
-          );
-        }
-      }
-
-      const extracted = parseQuestionsFromText(
-        result.text,
-        result.averageOcrConfidence,
-        result.questionImages,
-        result.questionTables
-      );
-      const merged =
-        Object.keys(activeKey).length > 0
-          ? mergeQuestionsWithAnswerKey(extracted, activeKey)
-          : extracted;
-
-      setParsedQuestions(merged);
-
-      if (!paperLabel.trim()) {
-        setPaperLabel(file.name.replace(/\.pdf$/i, '').replace(/[_-]+/g, ' ').trim());
-      }
-
-      const langLabel = formatLanguageLabel(result.detectedLanguage);
-      const bookletInfo = detectedCode ? ` • Booklet ${detectedCode}` : '';
-      setQuestionStatus(
-        merged.length > 0
-          ? `Detected ${merged.length} questions (${result.usedOcr ? 'OCR' : 'Digital'} • ${langLabel}${bookletInfo})`
-          : `No numbered MCQs detected (${langLabel}). Try enabling Scanned OCR Mode.`
-      );
-    } catch (err) {
-      setQuestionError(
-        err instanceof Error ? err.message : 'Failed to read the question paper PDF.'
-      );
-    } finally {
-      setIsParsingQuestions(false);
-    }
-  };
-
-  const handleAnswerKeyPdf = async (file: File) => {
-    setKeyFileName(file.name);
-    setKeyError(null);
-    setKeyStatus(null);
-    setIsParsingKey(true);
-
-    try {
-      const result = await extractTextFromPdf(file, setKeyProgress, {
-        ocrLanguage,
-        forceOcr,
-      });
-
-      const multiResult = parseMultiBookletAnswerKey(result.text);
-      setMultiBookletKey(multiResult);
-
-      const selectedKey = selectAnswerKeyForBooklet(multiResult, bookletCode);
-      setParsedAnswerKey(selectedKey);
-
-      if (parsedQuestions.length > 0) {
-        setParsedQuestions((prev) => mergeQuestionsWithAnswerKey(prev, selectedKey));
-      }
-
-      const count = Object.keys(selectedKey).length;
-      if (multiResult.isMultiBooklet) {
-        setKeyStatus(
-          `Detected ${multiResult.detectedBooklets.join('/')} booklets • Matched ${count} answers for Booklet ${bookletCode}.` ); } else { setKeyStatus( count > 0 ? `Extracted ${count} answer keys (${result.usedOcr ? 'OCR' : 'Digital'}).` : 'No answer keys matched automatically. Check that the Answer Key PDF is readable or try Force Scanned OCR.' ); } } catch (err) { setKeyError(err instanceof Error ? err.message : 'Failed to read the answer key PDF.'); } finally { setIsParsingKey(false); } };  const handleLoadSamplePaper = () => { setParsedQuestions( SAMPLE_EXAM_QUESTIONS.map((q) => ({ ...q, options: { ...q.options }, warnings: [...q.warnings], })) ); if (!paperLabel.trim()) { setPaperLabel(SAMPLE_EXAM_TITLE); } if (targetType === 'new' && !newHeadName.trim()) { setNewHeadName('Kerala PSC Sample Pool'); } setStep('verify'); };  const handleResetPdfFlow = () => { setStep('setup'); setParsedQuestions([]); setParsedAnswerKey({}); setMultiBookletKey(null); setQuestionFileName(null); setQuestionStatus(null); setQuestionError(null); setKeyFileName(null); setKeyStatus(null); setKeyError(null); setPaperLabel(''); setSavedSummary(null); };  const processJsonFile = async (file: File) => { setJsonError(null); setJsonSuccess(null); try { const pkg = await parseAndValidateImportFile(file); const analysis = analyzeImportAgainstExisting(pkg, examHeads); setJsonPreview(analysis); setJsonTargetMode(analysis.existingExamHead ? 'merge-existing' : 'create-new'); setJsonCustomName(`${pkg.examHeadName} (Copy)`);
-      setJsonExcludedIds({});
-    } catch (err) {
-      setJsonError(err instanceof Error ? err.message : 'Failed to parse JSON exam file.');
-    }
-  };
-
-  const handleCommitJsonImport = async () => {
-    if (!jsonPreview) return;
-    setJsonImporting(true);
-    setJsonError(null);
-    try {
-      const result = await commitImportedPackage(jsonPreview, {
-        targetMode: jsonTargetMode,
-        customExamName: jsonTargetMode === 'create-new' ? jsonCustomName : undefined,
-        excludedQuestionIds: Object.keys(jsonExcludedIds).filter((id) => jsonExcludedIds[id]),
-      });
-      setJsonSuccess({
-        examHead: result.examHead,
-        addedCount: result.addedCount,
-        skippedDuplicates: result.skippedDuplicates,
-      });
-      setJsonPreview(null);
-      onDataChanged();
-    } catch (err) {
-      setJsonError(err instanceof Error ? err.message : 'Failed to import exam file.');
-    } finally {
-      setJsonImporting(false);
-    }
-  };
-
-  const jsonNearDuplicateEntries = jsonPreview
-    ? jsonPreview.netNewQuestions
-        .filter((q) => Boolean(jsonPreview.nearDuplicateMatches[q.id]))
-        .map((q) => ({
-          question: q,
-          match: jsonPreview.nearDuplicateMatches[q.id],
-        }))
-    : [];
-
-  const jsonExcludedNearCount = jsonNearDuplicateEntries.filter(
-    (entry) => jsonExcludedIds[entry.question.id]
-  ).length;
-
-  const jsonWillAddCount = jsonPreview
-    ? jsonTargetMode === 'create-new'
-      ? Math.max(0, jsonPreview.packageData.questions.length - jsonExcludedNearCount)
-      : Math.max(0, jsonPreview.netNewQuestions.length - jsonExcludedNearCount)
-    : 0;
-
-  return (
-    <div className="space-y-6">
-      <div className="inline-flex rounded-xl border border-slate-200 bg-white p-1 shadow-sm">
-        <button
-          type="button"
-          onClick={() => setMode('pdf')}
-          className={`inline-flex items-center gap-2 rounded-lg px-4 py-2 text-xs font-semibold transition ${
-            mode === 'pdf'
-              ? 'bg-indigo-600 text-white shadow-sm'
-              : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
-          }`}
-        >
-          <FileText className="h-4 w-4" />
-          Convert PDF Paper
-        </button>
-        <button
-          type="button"
-          onClick={() => setMode('import-json')}
-          className={`inline-flex items-center gap-2 rounded-lg px-4 py-2 text-xs font-semibold transition ${
-            mode === 'import-json'
-              ? 'bg-indigo-600 text-white shadow-sm'
-              : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
-          }`}
-        >
-          <FileJson className="h-4 w-4" />
-          Import .json Exam File
-        </button>
-      </div>
-
-      {mode === 'pdf' && (
-        <>
-          <div className="flex flex-wrap items-center gap-2 text-xs font-semibold">
-            <span
-              className={`rounded-full px-3 py-1 ${
-                step === 'setup'
-                  ? 'bg-indigo-600 text-white'
+                        className={`flex h-6 w-6 shrink-0 items-center justify-center rounded text-xs font-bold ${
+                          q.correctOption === key
+                            ? 'bg-emerald-600 text-white'
+                            : 'bg-slate-100 text-slate-700'
+                        }`}
+                      >
+                        {key}
+                      </span>
+                      <input
+                        type="text"
+                        value={q.options[key]}
+                        onChange={(e) =>
+                          handleUpdateIncoming(q.tempId, {
+                            options: { ...q.options, [key]: e.target.value },
+                          })
+                        }
+                        className="w-full rounded-lg border border-slate-200 px-2.5 py-1 text-xs text-slate-900 focus:border-indigo-500 focus:outline-none"
+                      />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+};
