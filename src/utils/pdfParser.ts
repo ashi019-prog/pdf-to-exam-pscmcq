@@ -102,11 +102,6 @@ export function detectTextLanguage(text: string): DetectedLanguage {
   return 'unknown';
 }
 
-/**
- * Counts characters that indicate broken/non-Unicode Malayalam font encodings
- * (Latin-1 Supplement, Latin Extended-A/B, Private Use Area excluding Adobe Symbol math parens,
- * replacement characters, or raw CID tokens).
- */
 function countGarbledLegacyChars(text: string): number {
   const cleaned = text.replace(/[–—‘’“”•×÷±°µμ∈√∑∫]/g, '');
   const garbled = cleaned.match(/[\u0080-\u024F\uE000-\uF8EA\uFFFD]/g) ?? [];
@@ -114,14 +109,6 @@ function countGarbledLegacyChars(text: string): number {
   return garbled.length + cidTokens.length * 4;
 }
 
-/**
- * Classifies a PDF page's digital text layer into:
- * - 'scanned': too few characters (image-only page)
- * - 'unicode_or_english': clean Unicode Malayalam or clean English text
- * - 'shree_mal': verified SHREE-MAL-0501 / SHREE-MAL7-0501 legacy font (instant digital conversion)
- * - 'unsupported_legacy_font': Kartika CID, ML-TT, FML-TT, ISM, Indulekha, or any other non-Unicode font
- *   (automatically routed to high-resolution Malayalam+English OCR)
- */
 export function classifyPageTextEncoding(text: string): PageEncodingKind {
   const compact = text.replace(/\s+/g, '');
   if (compact.length < MIN_DIGITAL_CHARS_PER_PAGE) return 'scanned';
@@ -135,17 +122,14 @@ export function classifyPageTextEncoding(text: string): PageEncodingKind {
     text.match(/[A-Za-z][\]\[\\^_`{}|~¡¢£¤¥¦§¨©ª«¬®¯°±²³´µ¶·¸¹º»¼½¾¿][A-Za-z]/g) ?? []
   ).length;
 
-  // 1. Clean native Unicode Malayalam
   if (unicodeMalCount >= 15 && garbledRatio < 0.04) {
     return 'unicode_or_english';
   }
 
-  // 2. Clean English
   if (garbledRatio < 0.04 && midWordSymbols < 4 && latinExtCount < 5) {
     return 'unicode_or_english';
   }
 
-  // 3. Test whether this page is specifically SHREE-MAL-0501 / SHREE-MAL7-0501
   const testSample = text.slice(0, 2000);
   const convertedSample = convertShreeMalToUnicode(testSample);
   const convertedCompact = convertedSample.replace(/\s+/g, '');
@@ -160,7 +144,6 @@ export function classifyPageTextEncoding(text: string): PageEncodingKind {
     return 'shree_mal';
   }
 
-  // 4. Any other non-Unicode / broken-CMap Malayalam font (Kartika CID, ML-TT, FML-TT, Indulekha, ISM, etc.)
   return 'unsupported_legacy_font';
 }
 
@@ -344,10 +327,6 @@ function preprocessCanvasForOcr(canvas: HTMLCanvasElement): void {
   ctx.putImageData(imageData, 0, 0);
 }
 
-/**
- * Reconstructs structured HTML tables (e.g., Q36 & Q37 in Kerala PSC papers) directly
- * from PDF text item (x, y) coordinates, merging multi-line left cells with right-column values.
- */
 function extractQuestionTablesFromPage(
   rawItems: Array<{ str?: string; transform?: number[]; width?: number }>,
   isLegacyShreeMal: boolean
@@ -494,7 +473,7 @@ function extractQuestionTablesFromPage(
 
     for (let idx = firstRowIdx; idx < regionLines.length; idx += 1) {
       const line = regionLines[idx];
-      const isRowStart = /^(?:(?:i|ii|iii|iv|v)\.|\((?:i\vert{}ii\vert{}iii\vert{}iv\vert{}v)\))\s+/.test(line.fullText);
+      const isRowStart = /^(?:(?:i|ii|iii|iv|v)\.|\((?:i|ii|iii|iv|v)\))\s+/.test(line.fullText);
 
       if (!isRowStart && line.minX <= 94 && rows.length >= 2) {
         tableEndIdx = idx;
@@ -549,10 +528,6 @@ function extractQuestionTablesFromPage(
   return tables;
 }
 
-/**
- * Crops high-resolution PNG snapshots for stacked visual math equations (e.g., Q74, Q43)
- * and, on OCR pages with non-Unicode fonts, 2-column match tables (e.g., Q7, Q10).
- */
 async function extractVisualQuestionSnapshots(
   page: pdfjsLib.PDFPageProxy,
   rawItems: Array<{ str?: string; transform?: number[]; width?: number }>,
@@ -688,12 +663,14 @@ export async function extractTextFromPdf(
   }> = [];
 
   for (let pageNum = 1; pageNum <= totalPages; pageNum += 1) {
-    onProgress?.({
-      stage: 'reading',
-      currentPage: pageNum,
-      totalPages,
-      message: `Analyzing page ${pageNum} of ${totalPages}...`,
-    });
+    if (onProgress) {
+      onProgress({
+        stage: 'reading',
+        currentPage: pageNum,
+        totalPages,
+        message: `Analyzing page ${pageNum} of ${totalPages}...`,
+      });
+    }
 
     const page = await pdf.getPage(pageNum);
     const viewport = page.getViewport({ scale: 1.0 });
@@ -784,12 +761,14 @@ export async function extractTextFromPdf(
     try {
       for (let i = 0; i < pagesNeedingOcr.length; i += 1) {
         const entry = pagesNeedingOcr[i];
-        onProgress?.({
-          stage: 'ocr',
-          currentPage: i + 1,
-          totalPages: pagesNeedingOcr.length,
-          message: `Scanning ${langLabel} OCR — page ${entry.pageNum} (${i + 1}/${pagesNeedingOcr.length})...`,
-        });
+        if (onProgress) {
+          onProgress({
+            stage: 'ocr',
+            currentPage: i + 1,
+            totalPages: pagesNeedingOcr.length,
+            message: `Scanning ${langLabel} OCR — page ${entry.pageNum} (${i + 1}/${pagesNeedingOcr.length})...`,
+          });
+        }
 
         const page = await pdf.getPage(entry.pageNum);
         const viewport = page.getViewport({ scale: 3.0 });
@@ -1000,4 +979,170 @@ export function parseQuestionsFromText(
 
   for (let i = firstMcqMarkerIdx + 1; i < allMarkers.length; i += 1) {
     const candidate = allMarkers[i];
-    if (candidate.
+    if (candidate.number > lastQuestionNum && candidate.number <= lastQuestionNum + 25) {
+      questionMarkers.push(candidate);
+      lastQuestionNum = candidate.number;
+    }
+  }
+
+  const results: ExamQuestion[] = [];
+
+  for (let i = 0; i < questionMarkers.length; i += 1) {
+    const current = questionMarkers[i];
+    const next = questionMarkers[i + 1];
+    const blockBody = cleanedRaw
+      .slice(current.contentStart, next ? next.startIndex : cleanedRaw.length)
+      .trim();
+
+    const { question, optionCount } = parseQuestionBlock(
+      current.number,
+      blockBody,
+      ocrConfidence,
+      questionImages ? questionImages[current.number] : undefined,
+      questionTables ? questionTables[current.number] : undefined
+    );
+
+    if (looksLikeInstructionBlock(blockBody, optionCount) && results.length === 0) {
+      continue;
+    }
+
+    results.push(question);
+  }
+
+  return results;
+}
+
+function parseQuestionBlock(
+  questionNumber: number,
+  blockBody: string,
+  ocrConfidence?: number,
+  imageDataUrl?: string,
+  table?: QuestionTableData
+): { question: ExamQuestion; optionCount: number } {
+  const options: Record<OptionKey, string> = { A: '', B: '', C: '', D: '' };
+  const optionMatches = findSequentialOptions(blockBody);
+
+  let questionText = blockBody;
+
+  if (optionMatches.length > 0) {
+    questionText = cleanPreservingMathLines(blockBody.slice(0, optionMatches[0].matchIndex));
+
+    for (let i = 0; i < optionMatches.length; i += 1) {
+      const cur = optionMatches[i];
+      const nxt = optionMatches[i + 1];
+      let val = blockBody
+        .slice(cur.valueStart, nxt ? nxt.matchIndex : blockBody.length)
+        .replace(/[ \t]+/g, ' ')
+        .replace(/\n+/g, ' ')
+        .trim();
+      if (i === optionMatches.length - 1) {
+        val = stripBoilerplateFooter(val);
+      }
+      options[cur.key] = val;
+    }
+  } else {
+    questionText = cleanPreservingMathLines(blockBody);
+  }
+
+  const warnings = computeQuestionWarnings(questionText, options, null, ocrConfidence);
+
+  return {
+    question: {
+      number: questionNumber,
+      text: questionText,
+      options,
+      correctOption: null,
+      imageDataUrl,
+      table,
+      warnings,
+      ocrConfidence,
+    },
+    optionCount: optionMatches.length,
+  };
+}
+
+export function computeQuestionWarnings(
+  text: string,
+  options: Record<OptionKey, string>,
+  correctOption: OptionKey | null,
+  ocrConfidence?: number
+): ParseWarning[] {
+  const warnings: ParseWarning[] = [];
+
+  if (!text.trim()) {
+    warnings.push({
+      type: 'empty_question_text',
+      message: 'Question text is empty.',
+    });
+  }
+
+  const missingOptions = OPTION_KEYS.filter((key) => !(options[key] && options[key].trim()));
+  if (missingOptions.length > 0) {
+    warnings.push({
+      type: 'missing_option',
+      message: `Missing option${missingOptions.length > 1 ? 's' : ''}: ${missingOptions.join(', ')}`,
+    });
+  }
+
+  if (correctOption === null) {
+    warnings.push({
+      type: 'unmatched_answer_key',
+      message: 'No matched answer key for this question.',
+    });
+  }
+
+  if (typeof ocrConfidence === 'number' && ocrConfidence < LOW_OCR_CONFIDENCE_THRESHOLD) {
+    warnings.push({
+      type: 'low_ocr_confidence',
+      message: `Low OCR confidence (${ocrConfidence}%). Please verify text carefully.`,
+    });
+  }
+
+  return warnings;
+}
+
+export function parseAnswerKeyFromText(rawText: string): Record<number, OptionKey> {
+  const keyMap: Record<number, OptionKey> = {};
+  const normalized = normalizeMalayalamDigits(rawText)
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n');
+
+  const explicitPairRegex =
+    /(?:^|[\s|,;])(?:(?:Q(?:uestion)?|ചോദ്യം)\.?\s*)?(\d{1,3})\s*[.):\-–—=]\s*\(?([A-Da-d1-4]|അ|ആ|ഇ|ഈ|എ|ബി|സി|ഡി)\)?(?=$|[\s|,;.)])/gi;
+
+  let match: RegExpExecArray | null;
+  while ((match = explicitPairRegex.exec(normalized)) !== null) {
+    const qNum = parseInt(match[1], 10);
+    const opt = normalizeOptionKey(match[2]);
+    if (!Number.isNaN(qNum) && qNum > 0 && opt) {
+      keyMap[qNum] = opt;
+    }
+  }
+
+  if (Object.keys(keyMap).length === 0) {
+    const gridPairRegex = /(?:^|[\s|,;])(\d{1,3})\s+\(?([A-Da-d])\)?(?=$|[\s|,;])/g;
+    while ((match = gridPairRegex.exec(normalized)) !== null) {
+      const qNum = parseInt(match[1], 10);
+      const opt = normalizeOptionKey(match[2]);
+      if (!Number.isNaN(qNum) && qNum > 0 && opt) {
+        keyMap[qNum] = opt;
+      }
+    }
+  }
+
+  return keyMap;
+}
+
+export function mergeQuestionsWithAnswerKey(
+  questions: ExamQuestion[],
+  answerKey: Record<number, OptionKey>
+): ExamQuestion[] {
+  return questions.map((q) => {
+    const matched = answerKey[q.number] ?? q.correctOption ?? null;
+    return {
+      ...q,
+      correctOption: matched,
+      warnings: computeQuestionWarnings(q.text, q.options, matched, q.ocrConfidence),
+    };
+  });
+}
