@@ -9,9 +9,12 @@
     "electron/main.cjs"
   ],
   "extraMetadata": {
-    "main": "electron/main.cjs"
+    "main": "electron/main.cjs",
+    "description": "Offline-ready Kerala PSC PDF-to-Exam MCQ Simulator",
+    "author": "PSC Exam Studio"
   },
   "win": {
+    "signAndEditExecutable": false,
     "target": [
       {
         "target": "nsis",
