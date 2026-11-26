@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   ArrowRight,
@@ -112,6 +112,20 @@ export const UploadCreateTab: React.FC<UploadCreateTabProps> = ({
   const [parsedQuestions, setParsedQuestions] = useState<ExamQuestion[]>([]);
   const [multiBookletKey, setMultiBookletKey] = useState<MultiBookletAnswerKeyResult | null>(null);
   const [parsedAnswerKey, setParsedAnswerKey] = useState<Record<number, OptionKey>>({});
+
+  // Always auto-merge fetched Answer Key with parsed Questions regardless of upload order
+  const mergedQuestions = useMemo(() => {
+    const activeKey = multiBookletKey
+      ? selectAnswerKeyForBooklet(multiBookletKey, bookletCode)
+      : parsedAnswerKey;
+    if (Object.keys(activeKey).length === 0) return parsedQuestions;
+    return mergeQuestionsWithAnswerKey(parsedQuestions, activeKey);
+  }, [parsedQuestions, multiBookletKey, bookletCode, parsedAnswerKey]);
+
+  const matchedAnswerCount = useMemo(
+    () => mergedQuestions.filter((q) => q.correctOption !== null).length,
+    [mergedQuestions]
+  );
 
   const [savedSummary, setSavedSummary] = useState<{
     examHead: ExamHead;
@@ -262,7 +276,7 @@ export const UploadCreateTab: React.FC<UploadCreateTabProps> = ({
         setKeyStatus(
           count > 0
             ? `Extracted ${count} answer keys (${result.usedOcr ? 'OCR' : 'Digital'}).`
-            : 'No answer keys matched automatically. You can set them in Step 2.'
+            : 'No answer keys matched automatically. Check that the Answer Key PDF is readable or try Force Scanned OCR.'
         );
       }
     } catch (err) {
@@ -584,9 +598,9 @@ export const UploadCreateTab: React.FC<UploadCreateTabProps> = ({
                     <span className="font-semibold text-emerald-700">
                       Ready: {parsedQuestions.length} parsed question
                       {parsedQuestions.length === 1 ? '' : 's'}
-                      {Object.keys(parsedAnswerKey).length > 0
-                        ? ` • ${Object.keys(parsedAnswerKey).length} answer keys matched`
-                        : ''}
+                      {matchedAnswerCount > 0
+                        ? ` • ${matchedAnswerCount} answers auto-fetched from key`
+                        : ' • Upload Answer Key PDF to auto-fetch answers'}
                     </span>
                   ) : (
                     <span>Upload a Question Paper PDF (or load the sample paper) to continue.</span>
@@ -608,7 +622,7 @@ export const UploadCreateTab: React.FC<UploadCreateTabProps> = ({
 
           {step === 'verify' && (
             <VerificationMergeView
-              initialQuestions={parsedQuestions}
+              initialQuestions={mergedQuestions}
               defaultPaperLabel={paperLabel || questionFileName || 'Imported Paper'}
               initialExamHeadId={targetType === 'existing' ? selectedHeadId : undefined}
               initialCreatingNew={targetType === 'new'}
