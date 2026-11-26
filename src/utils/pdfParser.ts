@@ -54,6 +54,22 @@ export interface PositionedTextItem {
   width?: number;
 }
 
+interface RawPdfTextItem {
+  str?: string;
+  transform?: number[];
+  width?: number;
+}
+
+interface OcrWordBox {
+  text: string;
+  bbox: {
+    x0: number;
+    y0: number;
+    x1: number;
+    y1: number;
+  };
+}
+
 const MIN_DIGITAL_CHARS_PER_PAGE = 40;
 const LOW_OCR_CONFIDENCE_THRESHOLD = 72;
 
@@ -196,13 +212,236 @@ function cleanOcrMalayalamText(text: string): string {
     .replace(/[|¦]/g, ' ')
     .replace(/(^|\n)\s*(\d{1,3})\.(?=[\u0D00-\u0D7FA-Za-z‘'“"])/g, '$1$2. ')
     .replace(/\(\s*([A-Da-d])\s*\)/g, '($1)')
+    .replace(/(^|\n)\s*([A-D])[®©]\s+/g, '$1$2) ')
     .replace(/[ \t]{2,}/g, ' ')
     .trim();
 }
 
+function joinOcrWordsInReadingOrder(words: OcrWordBox[], scale: number): string {
+  if (words.length === 0) return '';
+  const lineThreshold = 10 * scale;
+  const lines: Array<{ cy: number; items: OcrWordBox[] }> = [];
+
+  for (const w of words) {
+    const t = w.text.trim();
+    if (!t || t === '|' || t === '¦') continue;
+    const cy = (w.bbox.y0 + w.bbox.y1) / 2;
+    let line = lines.find((l) => Math.abs(l.cy - cy) < lineThreshold);
+    if (!line) {
+      line = { cy, items: [] };
+      lines.push(line);
+    }
+    line.items.push(w);
+  }
+
+  lines.sort((a, b) => a.cy - b.cy);
+  return lines
+    .map((line) =>
+      line.items
+        .sort((a, b) => a.bbox.x0 - b.bbox.x0)
+        .map((w) => w.text.trim())
+        .join(' ')
+        .replace(/[ \t]+/g, ' ')
+        .trim()
+    )
+    .filter((l) => l.length > 0)
+    .join('\n');
+}
+
+function reconstructOcrPageWithPdfAnchors(
+  rawItems: RawPdfTextItem[],
+  pageHeight: number,
+  scale: number,
+  ocrWords: OcrWordBox[]
+): string | null {
+  if (rawItems.length === 0 || ocrWords.length === 0) return null;
+
+  interface MergedToken {
+    text: string;
+    x0: number;
+    x1: number;
+    yPdf: number;
+    heightPdf: number;
+  }
+
+  const pdfLines: Array<{ y: number; items: Array<{ x: number; endX: number; h: number; str: string }> }> = [];
+  for (const item of rawItems) {
+    const str = (item.str ?? '').trim();
+    if (!str) continue;
+    const x = item.transform ? item.transform[4] : 0;
+    const y = item.transform ? item.transform[5] : 0;
+    const h = item.transform
+      ? Math.max(8, Math.abs(item.transform[3]) || Math.abs(item.transform[0]) || 11)
+      : 11;
+    const width = item.width && item.width > 0 ? item.width : str.length * 5.5;
+
+    let line = pdfLines.find((l) => Math.abs(l.y - y) < 4);
+    if (!line) {
+      line = { y, items: [] };
+      pdfLines.push(line);
+    }
+    line.items.push({ x, endX: x + width, h, str });
+  }
+
+  const tokens: MergedToken[] = [];
+  for (const line of pdfLines) {
+    line.items.sort((a, b) => a.x - b.x);
+    let cur: MergedToken | null = null;
+    for (const part of line.items) {
+      if (cur && part.x - cur.x1 <= 3.5) {
+        cur.text += part.str;
+        cur.x1 = Math.max(cur.x1, part.endX);
+        cur.heightPdf = Math.max(cur.heightPdf, part.h);
+      } else {
+        if (cur) tokens.push(cur);
+        cur = {
+          text: part.str,
+          x0: part.x,
+          x1: part.endX,
+          yPdf: line.y,
+          heightPdf: part.h,
+        };
+      }
+    }
+    if (cur) tokens.push(cur);
+  }
+
+  interface QAnchor {
+    num: number;
+    px0: number;
+    px1: number;
+    pyTop: number;
+    pyBottom: number;
+  }
+
+  interface OptAnchor {
+    key: OptionKey;
+    px0: number;
+    px1: number;
+    pyTop: number;
+    pyBottom: number;
+  }
+
+  const qAnchors: QAnchor[] = [];
+  const optAnchors: OptAnchor[] = [];
+
+  for (const tok of tokens) {
+    if (tok.yPdf < 55) continue;
+    const t = tok.text.trim();
+    const px0 = tok.x0 * scale;
+    const px1 = tok.x1 * scale;
+    const pyBottom = (pageHeight - tok.yPdf) * scale;
+    const pyTop = pyBottom - tok.heightPdf * scale;
+
+    if (tok.x0 <= 110) {
+      const qMatch = t.match(/^(\d{1,3})\.$/);
+      if (qMatch) {
+        const num = parseInt(qMatch[1], 10);
+        if (num > 0 && num <= 300) {
+          qAnchors.push({ num, px0, px1, pyTop, pyBottom });
+          continue;
+        }
+      }
+    }
+
+    const optMatch = t.match(/^(?:\(([A-D])\)|([A-D])\))$/);
+    if (optMatch) {
+      const key = (optMatch[1] || optMatch[2]) as OptionKey;
+      optAnchors.push({ key, px0, px1, pyTop, pyBottom });
+    }
+  }
+
+  if (qAnchors.length === 0 || optAnchors.length < 2) return null;
+
+  qAnchors.sort((a, b) => a.pyTop - b.pyTop);
+  const footerLimitPx = (pageHeight - 52) * scale;
+  const outputBlocks: string[] = [];
+
+  for (let i = 0; i < qAnchors.length; i += 1) {
+    const q = qAnchors[i];
+    const nextQ = qAnchors[i + 1];
+    const qTop = q.pyTop - 8 * scale;
+    const qBottom = nextQ ? nextQ.pyTop - 8 * scale : footerLimitPx;
+
+    const qOpts = optAnchors
+      .filter((o) => o.pyTop >= qTop && o.pyTop < qBottom)
+      .sort((a, b) => a.pyTop - b.pyTop);
+
+    if (qOpts.length < 2) return null;
+
+    const optRows: Array<{ minTop: number; items: OptAnchor[] }> = [];
+    for (const opt of qOpts) {
+      let row = optRows.find((r) => Math.abs(r.minTop - opt.pyTop) < 10 * scale);
+      if (!row) {
+        row = { minTop: opt.pyTop, items: [] };
+        optRows.push(row);
+      }
+      row.items.push(opt);
+      row.minTop = Math.min(row.minTop, opt.pyTop);
+    }
+    optRows.sort((a, b) => a.minTop - b.minTop);
+    for (const row of optRows) {
+      row.items.sort((a, b) => a.px0 - b.px0);
+    }
+
+    const stemBottom = optRows[0].minTop - 5 * scale;
+    const stemWords: OcrWordBox[] = [];
+    const optionWords: Record<OptionKey, OcrWordBox[]> = { A: [], B: [], C: [], D: [] };
+
+    for (const w of ocrWords) {
+      const cx = (w.bbox.x0 + w.bbox.x1) / 2;
+      const cy = (w.bbox.y0 + w.bbox.y1) / 2;
+      if (cy < qTop || cy >= qBottom) continue;
+
+      if (cy < stemBottom) {
+        const isQNumBox = w.bbox.x1 <= q.px1 + 5 * scale && cy <= q.pyBottom + 6 * scale;
+        if (!isQNumBox) {
+          stemWords.push(w);
+        }
+        continue;
+      }
+
+      let matchedRowIdx = -1;
+      for (let r = 0; r < optRows.length; r += 1) {
+        const rTop = optRows[r].minTop - 6 * scale;
+        const rBottom = r + 1 < optRows.length ? optRows[r + 1].minTop - 5 * scale : qBottom;
+        if (cy >= rTop && cy < rBottom) {
+          matchedRowIdx = r;
+          break;
+        }
+      }
+      if (matchedRowIdx === -1) continue;
+
+      const rowItems = optRows[matchedRowIdx].items;
+      for (let c = 0; c < rowItems.length; c += 1) {
+        const opt = rowItems[c];
+        const nextOpt = rowItems[c + 1];
+        const minX = opt.px1 + 1.5 * scale;
+        const maxX = nextOpt ? nextOpt.px0 - 3 * scale : Number.POSITIVE_INFINITY;
+        if (cx >= minX && cx < maxX) {
+          optionWords[opt.key].push(w);
+          break;
+        }
+      }
+    }
+
+    const stemText = joinOcrWordsInReadingOrder(stemWords, scale);
+    const linesOut = [`${q.num}. ${stemText}`.trim()];
+    for (const key of OPTION_KEYS) {
+      const optText = joinOcrWordsInReadingOrder(optionWords[key], scale).replace(/\n+/g, ' ');
+      if (optText) {
+        linesOut.push(`${key}) ${optText}`);
+      }
+    }
+    outputBlocks.push(linesOut.join('\n'));
+  }
+
+  return outputBlocks.join('\n\n');
+}
+
 export function normalizeOptionKey(raw: string): OptionKey | null {
   const digitsNormalized = normalizeMalayalamDigits(raw).trim();
-  const stripped = digitsNormalized.replace(/[().:\-\s]/g, '');
+  const stripped = digitsNormalized.replace(/[().:\-\s®©]/g, '');
 
   if (stripped === 'അ' || stripped === 'എ' || stripped === 'ക') return 'A';
   if (stripped === 'ആ' || stripped === 'ബി' || stripped === '8') return 'B';
@@ -211,11 +450,12 @@ export function normalizeOptionKey(raw: string): OptionKey | null {
     stripped === 'സി' ||
     stripped === '0' ||
     stripped === 'O' ||
-    stripped === 'ധ'
+    stripped === 'ധ' ||
+    stripped === '5'
   ) {
     return 'C';
   }
-  if (stripped === 'ഈ' || stripped === 'ഡി') return 'D';
+  if (stripped === 'ഈ' || stripped === 'ഡി' || stripped === 'യ') return 'D';
 
   const cleaned = stripped.toUpperCase().replace(/[^A-D1-4]/g, '');
   switch (cleaned) {
@@ -263,10 +503,7 @@ function sortColumnLines(items: PositionedTextItem[]): string {
     .join('\n');
 }
 
-export function reconstructPageText(
-  items: Array<{ str?: string; transform?: number[]; width?: number }>,
-  pageWidth = 612
-): string {
+export function reconstructPageText(items: RawPdfTextItem[], pageWidth = 612): string {
   const positioned: PositionedTextItem[] = [];
   for (const item of items) {
     const str = item.str ?? '';
@@ -328,7 +565,7 @@ function preprocessCanvasForOcr(canvas: HTMLCanvasElement): void {
 }
 
 function extractQuestionTablesFromPage(
-  rawItems: Array<{ str?: string; transform?: number[]; width?: number }>,
+  rawItems: RawPdfTextItem[],
   isLegacyShreeMal: boolean
 ): Record<number, QuestionTableData> {
   const tables: Record<number, QuestionTableData> = {};
@@ -530,7 +767,7 @@ function extractQuestionTablesFromPage(
 
 async function extractVisualQuestionSnapshots(
   page: pdfjsLib.PDFPageProxy,
-  rawItems: Array<{ str?: string; transform?: number[]; width?: number }>,
+  rawItems: RawPdfTextItem[],
   includeTables = false
 ): Promise<Record<number, string>> {
   const snapshots: Record<number, string> = {};
@@ -660,6 +897,8 @@ export async function extractTextFromPdf(
     text: string;
     needsOcr: boolean;
     reason?: 'scanned' | 'legacy_font' | 'forced';
+    rawItems?: RawPdfTextItem[];
+    pageHeight?: number;
   }> = [];
 
   for (let pageNum = 1; pageNum <= totalPages; pageNum += 1) {
@@ -675,7 +914,7 @@ export async function extractTextFromPdf(
     const page = await pdf.getPage(pageNum);
     const viewport = page.getViewport({ scale: 1.0 });
     const content = await page.getTextContent();
-    const rawItems = content.items as Array<{ str?: string; transform?: number[]; width?: number }>;
+    const rawItems = content.items as RawPdfTextItem[];
     const rawDigital = reconstructPageText(rawItems, viewport.width);
 
     if (!forceOcr) {
@@ -691,13 +930,27 @@ export async function extractTextFromPdf(
       const encoding = classifyPageTextEncoding(rawDigital);
 
       if (encoding === 'scanned') {
-        pageResults.push({ pageNum, text: '', needsOcr: true, reason: 'scanned' });
+        pageResults.push({
+          pageNum,
+          text: '',
+          needsOcr: true,
+          reason: 'scanned',
+          rawItems,
+          pageHeight: viewport.height,
+        });
       } else if (encoding === 'unsupported_legacy_font') {
         if (typeof document !== 'undefined') {
           const pageSnaps = await extractVisualQuestionSnapshots(page, rawItems, true);
           Object.assign(questionImages, pageSnaps);
         }
-        pageResults.push({ pageNum, text: '', needsOcr: true, reason: 'legacy_font' });
+        pageResults.push({
+          pageNum,
+          text: '',
+          needsOcr: true,
+          reason: 'legacy_font',
+          rawItems,
+          pageHeight: viewport.height,
+        });
       } else {
         const isShreeMal = encoding === 'shree_mal';
 
@@ -735,7 +988,14 @@ export async function extractTextFromPdf(
           const pageSnaps = await extractVisualQuestionSnapshots(page, rawItems, true);
           Object.assign(questionImages, pageSnaps);
         }
-        pageResults.push({ pageNum, text: '', needsOcr: true, reason: 'forced' });
+        pageResults.push({
+          pageNum,
+          text: '',
+          needsOcr: true,
+          reason: 'forced',
+          rawItems,
+          pageHeight: viewport.height,
+        });
       }
     }
   }
@@ -759,6 +1019,7 @@ export async function extractTextFromPdf(
     const worker = await createWorker(ocrLanguage);
 
     try {
+      const ocrScale = 3.0;
       for (let i = 0; i < pagesNeedingOcr.length; i += 1) {
         const entry = pagesNeedingOcr[i];
         if (onProgress) {
@@ -771,7 +1032,7 @@ export async function extractTextFromPdf(
         }
 
         const page = await pdf.getPage(entry.pageNum);
-        const viewport = page.getViewport({ scale: 3.0 });
+        const viewport = page.getViewport({ scale: ocrScale });
         const canvas = document.createElement('canvas');
         canvas.width = Math.ceil(viewport.width);
         canvas.height = Math.ceil(viewport.height);
@@ -788,7 +1049,27 @@ export async function extractTextFromPdf(
         preprocessCanvasForOcr(canvas);
 
         const { data } = await worker.recognize(canvas);
-        entry.text = cleanOcrMalayalamText(stripPageHeadersAndFooters(data.text));
+        const ocrWords: OcrWordBox[] = Array.isArray(data.words)
+          ? data.words.map((w) => ({
+              text: w.text,
+              bbox: w.bbox,
+            }))
+          : [];
+
+        const anchoredText =
+          entry.rawItems && entry.pageHeight
+            ? reconstructOcrPageWithPdfAnchors(
+                entry.rawItems,
+                entry.pageHeight,
+                ocrScale,
+                ocrWords
+              )
+            : null;
+
+        entry.text = anchoredText
+          ? anchoredText
+          : cleanOcrMalayalamText(stripPageHeadersAndFooters(data.text));
+
         if (typeof data.confidence === 'number') {
           confidences.push(data.confidence);
         }
@@ -850,10 +1131,10 @@ interface SequentialOptionMatch {
 
 const OPTION_LABEL_SETS: Array<Record<OptionKey, string[]>> = [
   {
-    A: ['A', 'a', 'ക', '4', 'Ä'],
-    B: ['B', 'b', '8', 'ß'],
-    C: ['C', 'c', 'ധ', '0', 'O', '©'],
-    D: ['D', 'd', '0', 'O'],
+    A: ['A', 'a', 'ക', '4', 'Ä', 'A®'],
+    B: ['B', 'b', '8', 'ß', 'B®'],
+    C: ['C', 'c', 'ധ', '0', 'O', '©', '5'],
+    D: ['D', 'd', '0', 'O', 'യ', 'D®'],
   },
   {
     A: ['അ', 'എ'],
@@ -872,7 +1153,10 @@ const OPTION_LABEL_SETS: Array<Record<OptionKey, string[]>> = [
 function findSequentialOptions(blockBody: string): SequentialOptionMatch[] {
   const buildRegex = (alts: string[]) => {
     const joined = alts.join('|');
-    return new RegExp(`(?:^|\\n|[ \\t]{2,}|\\s)(?:\\((${joined})\\)|(${joined})[).:])\\s*`, 'g');
+    return new RegExp(
+      `(?:^|\\n|[ \\t]{2,}|\\s)(?:\\((${joined})\\)|(${joined})[).:®©])\\s*`,
+      'g'
+    );
   };
 
   for (const labelSet of OPTION_LABEL_SETS) {
