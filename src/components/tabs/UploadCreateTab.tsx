@@ -5,9 +5,11 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronUp,
+  Download,
   FileJson,
   FileText,
   Languages,
+  Layers,
   Share2,
   Shuffle,
   Sparkles,
@@ -15,7 +17,7 @@ import {
 } from 'lucide-react';
 import { ExamQuestion, OPTION_KEYS, OptionKey } from '../../types/exam';
 import { ExamHead } from '../../types/examHead';
-import { ImportAnalysisPreview } from '../../types/sharePackage';
+import { ExamSharePackage, FullBackupPackage } from '../../types/sharePackage';
 import {
   DetectedLanguage,
   extractTextFromPdf,
@@ -29,9 +31,15 @@ import {
 import { SAMPLE_EXAM_QUESTIONS, SAMPLE_EXAM_TITLE } from '../../data/sampleExam';
 import {
   analyzeImportAgainstExisting,
+  commitFullBackupImport,
   commitImportedPackage,
-  parseAndValidateImportFile,
+  parseImportJsonFile,
 } from '../../services/examImportService';
+import {
+  buildSharePackage,
+  downloadFullBackupFile,
+  downloadShareFile,
+} from '../../services/examShareService';
 import { PdfDropzone } from '../upload/PdfDropzone';
 import { VerificationMergeView } from '../examHead/VerificationMergeView';
 
@@ -132,14 +140,26 @@ export const UploadCreateTab: React.FC<UploadCreateTabProps> = ({
     addedCount: number;
   } | null>(null);
 
+  // JSON Export state
+  const [exportHeadId, setExportHeadId] = useState<string>(
+    examHeads.length > 0 ? examHeads[0].id : ''
+  );
+  const [exportStatus, setExportStatus] = useState<string | null>(null);
+  const [exportError, setExportError] = useState<string | null>(null);
+
+  // JSON Import state (supports both single paper/head AND full backup of all Exam Heads)
   const jsonInputRef = useRef<HTMLInputElement | null>(null);
   const [jsonDragging, setJsonDragging] = useState<boolean>(false);
   const [jsonError, setJsonError] = useState<string | null>(null);
-  const [jsonPreview, setJsonPreview] = useState<ImportAnalysisPreview | null>(null);
+  const [jsonPackage, setJsonPackage] = useState<ExamSharePackage | null>(null);
+  const [jsonBackupPreview, setJsonBackupPreview] = useState<FullBackupPackage | null>(null);
   const [jsonTargetMode, setJsonTargetMode] = useState<'merge-existing' | 'create-new'>(
     'merge-existing'
   );
+  const [jsonTargetHeadId, setJsonTargetHeadId] = useState<string>('');
   const [jsonCustomName, setJsonCustomName] = useState<string>('');
+  const [jsonPaperLabel, setJsonPaperLabel] = useState<string>('');
+  const [jsonExamYear, setJsonExamYear] = useState<string>('');
   const [jsonExcludedIds, setJsonExcludedIds] = useState<Record<string, boolean>>({});
   const [jsonShowNearDupes, setJsonShowNearDupes] = useState<boolean>(false);
   const [jsonImporting, setJsonImporting] = useState<boolean>(false);
@@ -147,6 +167,11 @@ export const UploadCreateTab: React.FC<UploadCreateTabProps> = ({
     examHead: ExamHead;
     addedCount: number;
     skippedDuplicates: number;
+  } | null>(null);
+  const [backupSuccess, setBackupSuccess] = useState<{
+    importedHeadsCount: number;
+    totalAddedQuestions: number;
+    totalSkippedDuplicates: number;
   } | null>(null);
 
   useEffect(() => {
@@ -159,6 +184,61 @@ export const UploadCreateTab: React.FC<UploadCreateTabProps> = ({
       setTargetType('new');
     }
   }, [preselectedExamHeadId, examHeads, selectedHeadId]);
+
+  useEffect(() => {
+    if (examHeads.length > 0 && !examHeads.some((h) => h.id === exportHeadId)) {
+      setExportHeadId(examHeads[0].id);
+    }
+  }, [examHeads, exportHeadId]);
+
+  // Live duplicate analysis against whichever existing Exam Head the user selects
+  const jsonPreview = useMemo(() => {
+    if (!jsonPackage) return null;
+    const targetId = jsonTargetMode === 'merge-existing' ? jsonTargetHeadId || null : null;
+    return analyzeImportAgainstExisting(jsonPackage, examHeads, targetId);
+  }, [jsonPackage, examHeads, jsonTargetMode, jsonTargetHeadId]);
+
+  const totalLibraryQuestions = useMemo(
+    () => examHeads.reduce((sum, h) => sum + h.questions.length, 0),
+    [examHeads]
+  );
+
+  const nonEmptyHeadsCount = useMemo(
+    () => examHeads.filter((h) => h.questions.length > 0).length,
+    [examHeads]
+  );
+
+  const handleExportAllJson = () => {
+    setExportError(null);
+    setExportStatus(null);
+    try {
+      const result = downloadFullBackupFile(examHeads);
+      setExportStatus(
+        `Exported ${result.examHeadCount} Exam Head${result.examHeadCount === 1 ? '' : 's'} (${result.totalQuestions} questions) to ${result.filename}`
+      );
+    } catch (err) {
+      setExportError(err instanceof Error ? err.message : 'Failed to export Exam Heads.');
+    }
+  };
+
+  const handleExportSingleJson = () => {
+    setExportError(null);
+    setExportStatus(null);
+    const target = examHeads.find((h) => h.id === exportHeadId);
+    if (!target) {
+      setExportError('Select an Exam Head to export.');
+      return;
+    }
+    try {
+      const pkg = buildSharePackage(target, { mode: 'full' });
+      const filename = downloadShareFile(pkg);
+      setExportStatus(
+        `Exported "${target.name}" (${pkg.questionCount} questions) to ${filename}`
+      );
+    } catch (err) {
+      setExportError(err instanceof Error ? err.message : 'Failed to export Exam Head.');
+    }
+  };
 
   const applyBookletCode = (
     nextCode: OptionKey,
@@ -322,13 +402,48 @@ export const UploadCreateTab: React.FC<UploadCreateTabProps> = ({
   const processJsonFile = async (file: File) => {
     setJsonError(null);
     setJsonSuccess(null);
+    setBackupSuccess(null);
+    setJsonPackage(null);
+    setJsonBackupPreview(null);
+    setJsonExcludedIds({});
+
     try {
-      const pkg = await parseAndValidateImportFile(file);
-      const analysis = analyzeImportAgainstExisting(pkg, examHeads);
-      setJsonPreview(analysis);
-      setJsonTargetMode(analysis.existingExamHead ? 'merge-existing' : 'create-new');
-      setJsonCustomName(`${pkg.examHeadName} (Copy)`);
-      setJsonExcludedIds({});
+      const parsed = await parseImportJsonFile(file);
+      if (parsed.kind === 'full-backup') {
+        setJsonBackupPreview(parsed.backupData);
+        return;
+      }
+
+      const pkg = parsed.packageData;
+      const autoMatch = analyzeImportAgainstExisting(pkg, examHeads);
+      const defaultExistingId =
+        autoMatch.existingExamHead?.id ||
+        (preselectedExamHeadId && examHeads.some((h) => h.id === preselectedExamHeadId)
+          ? preselectedExamHeadId
+          : examHeads.length > 0
+          ? examHeads[0].id
+          : '');
+
+      const defaultBatchLabel =
+        pkg.includedPapers.length > 0
+          ? pkg.includedPapers.map((p) => p.paperLabel).join(' + ')
+          : pkg.examHeadName;
+      const detectedYear =
+        (pkg.includedPapers.length > 0 && pkg.includedPapers[0].examYear) ||
+        ((defaultBatchLabel.match(/\b(19\d{2}|20\d{2})\b/) || [])[1] ?? '');
+
+      setJsonPackage(pkg);
+      setJsonTargetHeadId(defaultExistingId);
+      setJsonTargetMode(
+        autoMatch.existingExamHead || (preselectedExamHeadId && defaultExistingId)
+          ? 'merge-existing'
+          : examHeads.length > 0
+          ? 'merge-existing'
+          : 'create-new'
+      );
+      setJsonCustomName(pkg.examHeadName);
+      setJsonPaperLabel(defaultBatchLabel);
+      setJsonExamYear(detectedYear);
     } catch (err) {
       setJsonError(err instanceof Error ? err.message : 'Failed to parse JSON exam file.');
     }
@@ -341,7 +456,11 @@ export const UploadCreateTab: React.FC<UploadCreateTabProps> = ({
     try {
       const result = await commitImportedPackage(jsonPreview, {
         targetMode: jsonTargetMode,
+        targetExamHeadId:
+          jsonTargetMode === 'merge-existing' ? jsonTargetHeadId || undefined : undefined,
         customExamName: jsonTargetMode === 'create-new' ? jsonCustomName : undefined,
+        paperLabelOverride: jsonPaperLabel.trim() || undefined,
+        examYearOverride: jsonExamYear.trim() || undefined,
         excludedQuestionIds: Object.keys(jsonExcludedIds).filter((id) => jsonExcludedIds[id]),
       });
       setJsonSuccess({
@@ -349,10 +468,30 @@ export const UploadCreateTab: React.FC<UploadCreateTabProps> = ({
         addedCount: result.addedCount,
         skippedDuplicates: result.skippedDuplicates,
       });
-      setJsonPreview(null);
+      setJsonPackage(null);
       onDataChanged();
     } catch (err) {
       setJsonError(err instanceof Error ? err.message : 'Failed to import exam file.');
+    } finally {
+      setJsonImporting(false);
+    }
+  };
+
+  const handleCommitFullBackup = async () => {
+    if (!jsonBackupPreview) return;
+    setJsonImporting(true);
+    setJsonError(null);
+    try {
+      const result = await commitFullBackupImport(jsonBackupPreview, examHeads);
+      setBackupSuccess({
+        importedHeadsCount: result.importedHeadsCount,
+        totalAddedQuestions: result.totalAddedQuestions,
+        totalSkippedDuplicates: result.totalSkippedDuplicates,
+      });
+      setJsonBackupPreview(null);
+      onDataChanged();
+    } catch (err) {
+      setJsonError(err instanceof Error ? err.message : 'Failed to import full backup.');
     } finally {
       setJsonImporting(false);
     }
@@ -402,7 +541,7 @@ export const UploadCreateTab: React.FC<UploadCreateTabProps> = ({
           }`}
         >
           <FileJson className="h-4 w-4" />
-          Import .json Exam File
+          Import / Export .json
         </button>
       </div>
 
@@ -686,255 +825,482 @@ export const UploadCreateTab: React.FC<UploadCreateTabProps> = ({
       )}
 
       {mode === 'import-json' && (
-        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm space-y-5">
-          <div>
-            <h2 className="text-base font-bold text-slate-900">
-              Import Shared Exam Bank (.json)
-            </h2>
-            <p className="mt-1 text-xs text-slate-600">
-              Import a full Exam Head or newly added update pack shared via WhatsApp, Telegram, or
-              Email. Existing questions and your personal stats are always preserved.
-            </p>
+        <div className="space-y-6">
+          {/* Export Section: All Exam Heads or Single Exam Head as .json */}
+          <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm space-y-4">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h2 className="text-base font-bold text-slate-900">
+                  Export Exam Heads &amp; Questions (.json)
+                </h2>
+                <p className="mt-1 text-xs text-slate-600">
+                  Download a single <code className="rounded bg-slate-100 px-1">.json</code> backup
+                  containing all Exam Heads, paper batches, questions, and answers — or export one
+                  specific Exam Head.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                disabled={nonEmptyHeadsCount === 0}
+                onClick={handleExportAllJson}
+                className="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2.5 text-xs font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:bg-slate-300"
+              >
+                <Download className="h-4 w-4" />
+                Export All Exam Heads ({nonEmptyHeadsCount} Heads • {totalLibraryQuestions} Qs)
+              </button>
+            </div>
+
+            {examHeads.length > 0 && (
+              <div className="flex flex-wrap items-center gap-2.5 rounded-xl border border-slate-200 bg-slate-50 p-3">
+                <span className="text-xs font-semibold text-slate-700">
+                  Or export a single Exam Head:
+                </span>
+                <select
+                  value={exportHeadId}
+                  onChange={(e) => setExportHeadId(e.target.value)}
+                  className="min-w-[200px] flex-1 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-900 focus:border-indigo-500 focus:outline-none"
+                >
+                  {examHeads.map((h) => (
+                    <option key={h.id} value={h.id}>
+                      {h.name} ({h.questions.length} Qs • {h.importedPapers.length} Batches)
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  disabled={
+                    !exportHeadId ||
+                    (examHeads.find((h) => h.id === exportHeadId)?.questions.length ?? 0) === 0
+                  }
+                  onClick={handleExportSingleJson}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+                >
+                  <Download className="h-3.5 w-3.5 text-indigo-600" />
+                  Export Selected (.json)
+                </button>
+              </div>
+            )}
+
+            {exportStatus && (
+              <div className="flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3.5 py-2 text-xs font-semibold text-emerald-800">
+                <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600" />
+                <span>{exportStatus}</span>
+              </div>
+            )}
+
+            {exportError && (
+              <div className="flex items-center gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3.5 py-2 text-xs font-semibold text-rose-800">
+                <AlertTriangle className="h-4 w-4 shrink-0 text-rose-600" />
+                <span>{exportError}</span>
+              </div>
+            )}
           </div>
 
-          {jsonError && (
-            <div className="flex items-start gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-xs font-medium text-rose-800">
-              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-              <span>{jsonError}</span>
+          {/* Import Section: Single Paper/Batch OR Full Backup (.json) */}
+          <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm space-y-5">
+            <div>
+              <h2 className="text-base font-bold text-slate-900">
+                Import Exam Bank or Full Backup (.json)
+              </h2>
+              <p className="mt-1 text-xs text-slate-600">
+                Import a single paper/batch <code className="rounded bg-slate-100 px-1">.json</code>{' '}
+                (and pick which Exam Head to add it into) or restore a Full Backup containing all
+                Exam Heads. Existing questions and stats are always preserved.
+              </p>
             </div>
-          )}
 
-          {jsonSuccess ? (
-            <div className="space-y-4 rounded-xl border border-emerald-200 bg-emerald-50/60 p-5">
-              <div className="flex items-start gap-3">
-                <CheckCircle2 className="h-6 w-6 shrink-0 text-emerald-600" />
-                <div>
-                  <h3 className="text-sm font-bold text-emerald-900">
-                    Imported {jsonSuccess.addedCount} new questions into &ldquo;
-                    {jsonSuccess.examHead.name}&rdquo;
-                  </h3>
-                  <p className="mt-1 text-xs text-emerald-800">
-                    Total pool is now <strong>{jsonSuccess.examHead.questions.length}</strong>{' '}
-                    questions ({jsonSuccess.skippedDuplicates} duplicates safely skipped).
-                  </p>
-                </div>
+            {jsonError && (
+              <div className="flex items-start gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-xs font-medium text-rose-800">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                <span>{jsonError}</span>
               </div>
-              <div className="flex flex-wrap gap-2">
+            )}
+
+            {backupSuccess ? (
+              <div className="space-y-4 rounded-xl border border-emerald-200 bg-emerald-50/60 p-5">
+                <div className="flex items-start gap-3">
+                  <CheckCircle2 className="h-6 w-6 shrink-0 text-emerald-600" />
+                  <div>
+                    <h3 className="text-sm font-bold text-emerald-900">
+                      Restored {backupSuccess.importedHeadsCount} Exam Head
+                      {backupSuccess.importedHeadsCount === 1 ? '' : 's'} from Full Backup
+                    </h3>
+                    <p className="mt-1 text-xs text-emerald-800">
+                      Added <strong>{backupSuccess.totalAddedQuestions}</strong> new questions (
+                      {backupSuccess.totalSkippedDuplicates} duplicates safely skipped).
+                    </p>
+                  </div>
+                </div>
                 <button
                   type="button"
-                  onClick={() => onLaunchMock(jsonSuccess.examHead.id)}
-                  className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-4 py-2 text-xs font-semibold text-white hover:bg-indigo-700"
-                >
-                  <Shuffle className="h-3.5 w-3.5" />
-                  Launch Random Mock Now
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setJsonSuccess(null)}
+                  onClick={() => setBackupSuccess(null)}
                   className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
                 >
                   Import Another File
                 </button>
               </div>
-            </div>
-          ) : !jsonPreview ? (
-            <div
-              onDragOver={(e) => {
-                e.preventDefault();
-                setJsonDragging(true);
-              }}
-              onDragLeave={() => setJsonDragging(false)}
-              onDrop={(e) => {
-                e.preventDefault();
-                setJsonDragging(false);
-                const file = e.dataTransfer.files ? e.dataTransfer.files[0] : undefined;
-                if (file) void processJsonFile(file);
-              }}
-              onClick={() => jsonInputRef.current?.click()}
-              role="button"
-              tabIndex={0}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  e.preventDefault();
-                  jsonInputRef.current?.click();
-                }
-              }}
-              className={`flex cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed p-10 text-center transition ${
-                jsonDragging
-                  ? 'border-indigo-500 bg-indigo-50/70'
-                  : 'border-slate-300 bg-slate-50/60 hover:border-indigo-400 hover:bg-slate-50'
-              }`}
-            >
-              <input
-                ref={jsonInputRef}
-                type="file"
-                accept=".json,application/json"
-                className="hidden"
-                onChange={(e) => {
-                  const file = e.target.files ? e.target.files[0] : undefined;
-                  e.target.value = '';
-                  if (file) void processJsonFile(file);
-                }}
-              />
-              <div className="flex h-12 w-12 items-center justify-center rounded-full bg-indigo-100 text-indigo-600">
-                <Upload className="h-6 w-6" />
-              </div>
-              <p className="mt-3 text-sm font-bold text-slate-900">
-                Drop a shared .json Exam Bank file here, or click to browse
-              </p>
-              <p className="mt-1 text-xs text-slate-500">
-                Supports both Full Exam Head exports and Newly Added Update Packs
-              </p>
-            </div>
-          ) : (
-            <div className="space-y-4">
-              <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-                <div className="flex flex-wrap items-center justify-between gap-2">
+            ) : jsonSuccess ? (
+              <div className="space-y-4 rounded-xl border border-emerald-200 bg-emerald-50/60 p-5">
+                <div className="flex items-start gap-3">
+                  <CheckCircle2 className="h-6 w-6 shrink-0 text-emerald-600" />
                   <div>
-                    <p className="text-sm font-bold text-slate-900">
-                      {jsonPreview.packageData.examHeadName}
-                    </p>
-                    <p className="text-xs text-slate-500">
-                      {jsonPreview.packageData.exportType === 'update'
-                        ? 'Update Pack'
-                        : 'Full Exam Head'}{' '}
-                      • {jsonPreview.packageData.questionCount} questions
-                    </p>
-                  </div>
-                  <span
-                    className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${
-                      jsonPreview.existingExamHead
-                        ? 'bg-indigo-100 text-indigo-800'
-                        : 'bg-emerald-100 text-emerald-800'
-                    }`}
-                  >
-                    {jsonPreview.existingExamHead
-                      ? `Matches Existing (${jsonPreview.existingExamHead.questions.length} stored)`
-                      : 'New Exam Head'}
-                  </span>
-                </div>
-
-                <div className="mt-3 grid grid-cols-3 gap-2 text-center text-xs">
-                  <div className="rounded-lg bg-white p-2.5 border border-slate-200">
-                    <p className="font-semibold text-slate-500">Will Add</p>
-                    <p className="mt-0.5 text-base font-extrabold text-emerald-700">
-                      {jsonWillAddCount}
-                    </p>
-                  </div>
-                  <div className="rounded-lg bg-white p-2.5 border border-slate-200">
-                    <p className="font-semibold text-slate-500">Exact Duplicates</p>
-                    <p className="mt-0.5 text-base font-extrabold text-slate-700">
-                      {jsonPreview.exactDuplicateCount}
-                    </p>
-                  </div>
-                  <div className="rounded-lg bg-white p-2.5 border border-slate-200">
-                    <p className="font-semibold text-slate-500">Near Duplicates</p>
-                    <p className="mt-0.5 text-base font-extrabold text-amber-700">
-                      {jsonNearDuplicateEntries.length}
+                    <h3 className="text-sm font-bold text-emerald-900">
+                      Imported {jsonSuccess.addedCount} new questions into &ldquo;
+                      {jsonSuccess.examHead.name}&rdquo;
+                    </h3>
+                    <p className="mt-1 text-xs text-emerald-800">
+                      Total pool is now <strong>{jsonSuccess.examHead.questions.length}</strong>{' '}
+                      questions ({jsonSuccess.skippedDuplicates} duplicates safely skipped).
                     </p>
                   </div>
                 </div>
-              </div>
-
-              {jsonPreview.existingExamHead && (
-                <div className="space-y-2 rounded-xl border border-slate-200 p-3.5 text-xs">
-                  <label className="flex cursor-pointer items-center gap-2 font-semibold text-slate-800">
-                    <input
-                      type="radio"
-                      checked={jsonTargetMode === 'merge-existing'}
-                      onChange={() => setJsonTargetMode('merge-existing')}
-                    />
-                    Merge into existing &ldquo;{jsonPreview.existingExamHead.name}&rdquo;
-                    (non-destructive)
-                  </label>
-                  <label className="flex cursor-pointer items-center gap-2 font-semibold text-slate-800">
-                    <input
-                      type="radio"
-                      checked={jsonTargetMode === 'create-new'}
-                      onChange={() => setJsonTargetMode('create-new')}
-                    />
-                    Save as a separate new Exam Head
-                  </label>
-                  {jsonTargetMode === 'create-new' && (
-                    <input
-                      type="text"
-                      value={jsonCustomName}
-                      onChange={(e) => setJsonCustomName(e.target.value)}
-                      className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-1.5 text-xs text-slate-900"
-                    />
-                  )}
-                </div>
-              )}
-
-              {jsonNearDuplicateEntries.length > 0 && (
-                <div className="rounded-xl border border-amber-200 bg-amber-50/50 p-3 text-xs">
+                <div className="flex flex-wrap gap-2">
                   <button
                     type="button"
-                    onClick={() => setJsonShowNearDupes((prev) => !prev)}
-                    className="flex w-full items-center justify-between font-semibold text-amber-900"
+                    onClick={() => onLaunchMock(jsonSuccess.examHead.id)}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-4 py-2 text-xs font-semibold text-white hover:bg-indigo-700"
                   >
-                    <span>
-                      Review {jsonNearDuplicateEntries.length} Near-Duplicate Question(s)
-                    </span>
-                    {jsonShowNearDupes ? (
-                      <ChevronUp className="h-4 w-4" />
-                    ) : (
-                      <ChevronDown className="h-4 w-4" />
-                    )}
+                    <Shuffle className="h-3.5 w-3.5" />
+                    Launch Random Mock Now
                   </button>
-                  {jsonShowNearDupes && (
-                    <div className="mt-2.5 space-y-2">
-                      {jsonNearDuplicateEntries.map((entry) => (
-                        <label
-                          key={entry.question.id}
-                          className="flex items-start gap-2 rounded-lg border border-amber-200 bg-white p-2"
+                  <button
+                    type="button"
+                    onClick={() => setJsonSuccess(null)}
+                    className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                  >
+                    Import Another File
+                  </button>
+                </div>
+              </div>
+            ) : jsonBackupPreview ? (
+              <div className="space-y-4">
+                <div className="rounded-xl border border-indigo-200 bg-indigo-50/60 p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <Layers className="h-5 w-5 text-indigo-600" />
+                      <div>
+                        <p className="text-sm font-bold text-slate-900">
+                          Full Backup Package ({jsonBackupPreview.examHeadCount} Exam Heads)
+                        </p>
+                        <p className="text-xs text-slate-600">
+                          {jsonBackupPreview.totalQuestions} total questions • Exported{' '}
+                          {new Date(jsonBackupPreview.exportedAt).toLocaleDateString()}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="mt-3 max-h-60 space-y-2 overflow-y-auto">
+                    {jsonBackupPreview.examHeads.map((pkg) => {
+                      const matchesExisting = examHeads.some(
+                        (h) =>
+                          h.id === pkg.examHeadId ||
+                          h.name.trim().toLowerCase() === pkg.examHeadName.trim().toLowerCase()
+                      );
+                      return (
+                        <div
+                          key={pkg.examHeadId}
+                          className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs"
                         >
-                          <input
-                            type="checkbox"
-                            checked={!jsonExcludedIds[entry.question.id]}
-                            onChange={(e) =>
-                              setJsonExcludedIds((prev) => ({
-                                ...prev,
-                                [entry.question.id]: !e.target.checked,
-                              }))
-                            }
-                            className="mt-0.5"
-                          />
                           <div>
-                            <p className="font-semibold text-slate-800">{entry.question.text}</p>
-                            <p className="mt-0.5 text-[11px] text-amber-700">
-                              {Math.round(entry.match.similarityScore * 100)}% similar to Pool Q
-                              {entry.match.matchedExistingQuestion.poolNumber}
-                            </p>
+                            <span className="font-bold text-slate-900">{pkg.examHeadName}</span>
+                            <span className="ml-2 text-slate-500">
+                              {pkg.questionCount} Qs • {pkg.includedPapers.length} batch
+                              {pkg.includedPapers.length === 1 ? '' : 'es'}
+                            </span>
                           </div>
-                        </label>
-                      ))}
+                          <span
+                            className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${
+                              matchesExisting
+                                ? 'bg-indigo-100 text-indigo-800'
+                                : 'bg-emerald-100 text-emerald-800'
+                            }`}
+                          >
+                            {matchesExisting ? 'Merge into Existing' : 'Create New'}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setJsonBackupPreview(null)}
+                    className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                  >
+                    Choose Different File
+                  </button>
+                  <button
+                    type="button"
+                    disabled={jsonImporting}
+                    onClick={handleCommitFullBackup}
+                    className="rounded-lg bg-emerald-600 px-5 py-2 text-xs font-semibold text-white hover:bg-emerald-700 disabled:bg-slate-300"
+                  >
+                    {jsonImporting
+                      ? 'Importing All...'
+                      : `Import All ${jsonBackupPreview.examHeadCount} Exam Heads`}
+                  </button>
+                </div>
+              </div>
+            ) : !jsonPreview ? (
+              <div
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  setJsonDragging(true);
+                }}
+                onDragLeave={() => setJsonDragging(false)}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  setJsonDragging(false);
+                  const file = e.dataTransfer.files ? e.dataTransfer.files[0] : undefined;
+                  if (file) void processJsonFile(file);
+                }}
+                onClick={() => jsonInputRef.current?.click()}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    jsonInputRef.current?.click();
+                  }
+                }}
+                className={`flex cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed p-10 text-center transition ${
+                  jsonDragging
+                    ? 'border-indigo-500 bg-indigo-50/70'
+                    : 'border-slate-300 bg-slate-50/60 hover:border-indigo-400 hover:bg-slate-50'
+                }`}
+              >
+                <input
+                  ref={jsonInputRef}
+                  type="file"
+                  accept=".json,application/json"
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files ? e.target.files[0] : undefined;
+                    e.target.value = '';
+                    if (file) void processJsonFile(file);
+                  }}
+                />
+                <div className="flex h-12 w-12 items-center justify-center rounded-full bg-indigo-100 text-indigo-600">
+                  <Upload className="h-6 w-6" />
+                </div>
+                <p className="mt-3 text-sm font-bold text-slate-900">
+                  Drop any .json Exam Bank or Full Backup file here, or click to browse
+                </p>
+                <p className="mt-1 text-xs text-slate-500">
+                  Supports Single Paper/Batch files, Full Exam Heads, and All-Exam-Heads Backups
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <p className="text-sm font-bold text-slate-900">
+                        {jsonPreview.packageData.examHeadName}
+                      </p>
+                      <p className="text-xs text-slate-500">
+                        {jsonPreview.packageData.exportType === 'update'
+                          ? 'Paper / Update Pack'
+                          : 'Exam Bank'}{' '}
+                        • {jsonPreview.packageData.questionCount} questions
+                      </p>
+                    </div>
+                    <span
+                      className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${
+                        jsonTargetMode === 'merge-existing' && jsonPreview.existingExamHead
+                          ? 'bg-indigo-100 text-indigo-800'
+                          : 'bg-emerald-100 text-emerald-800'
+                      }`}
+                    >
+                      {jsonTargetMode === 'merge-existing' && jsonPreview.existingExamHead
+                        ? `Target: ${jsonPreview.existingExamHead.name} (${jsonPreview.existingExamHead.questions.length} stored)`
+                        : 'Creating New Exam Head'}
+                    </span>
+                  </div>
+
+                  <div className="mt-3 grid grid-cols-3 gap-2 text-center text-xs">
+                    <div className="rounded-lg border border-slate-200 bg-white p-2.5">
+                      <p className="font-semibold text-slate-500">Will Add</p>
+                      <p className="mt-0.5 text-base font-extrabold text-emerald-700">
+                        {jsonWillAddCount}
+                      </p>
+                    </div>
+                    <div className="rounded-lg border border-slate-200 bg-white p-2.5">
+                      <p className="font-semibold text-slate-500">Exact Duplicates</p>
+                      <p className="mt-0.5 text-base font-extrabold text-slate-700">
+                        {jsonPreview.exactDuplicateCount}
+                      </p>
+                    </div>
+                    <div className="rounded-lg border border-slate-200 bg-white p-2.5">
+                      <p className="font-semibold text-slate-500">Near Duplicates</p>
+                      <p className="mt-0.5 text-base font-extrabold text-amber-700">
+                        {jsonNearDuplicateEntries.length}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Target Exam Head Selector (always available so user can import any paper/batch into any Exam Head) */}
+                <div className="space-y-3 rounded-xl border border-slate-200 p-4 text-xs">
+                  <p className="font-bold text-slate-900">Choose Destination Exam Head</p>
+
+                  {examHeads.length > 0 && (
+                    <div className="space-y-2">
+                      <label className="flex cursor-pointer items-center gap-2 font-semibold text-slate-800">
+                        <input
+                          type="radio"
+                          checked={jsonTargetMode === 'merge-existing'}
+                          onChange={() => setJsonTargetMode('merge-existing')}
+                        />
+                        Add as a paper/batch into an existing Exam Head
+                      </label>
+
+                      {jsonTargetMode === 'merge-existing' && (
+                        <select
+                          value={jsonTargetHeadId}
+                          onChange={(e) => {
+                            setJsonTargetHeadId(e.target.value);
+                            setJsonExcludedIds({});
+                          }}
+                          className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-900 focus:border-indigo-500 focus:outline-none"
+                        >
+                          {examHeads.map((h) => (
+                            <option key={h.id} value={h.id}>
+                              {h.name} ({h.questions.length} stored Qs • {h.importedPapers.length}{' '}
+                              batches)
+                            </option>
+                          ))}
+                        </select>
+                      )}
                     </div>
                   )}
-                </div>
-              )}
 
-              <div className="flex items-center justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={() => setJsonPreview(null)}
-                  className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-                >
-                  Choose Different File
-                </button>
-                <button
-                  type="button"
-                  disabled={jsonImporting}
-                  onClick={handleCommitJsonImport}
-                  className="rounded-lg bg-emerald-600 px-5 py-2 text-xs font-semibold text-white hover:bg-emerald-700 disabled:bg-slate-300"
-                >
-                  {jsonImporting
-                    ? 'Importing...'
-                    : `Import & Merge (${jsonWillAddCount} New Questions)`}
-                </button>
+                  <div className="space-y-2">
+                    <label className="flex cursor-pointer items-center gap-2 font-semibold text-slate-800">
+                      <input
+                        type="radio"
+                        checked={jsonTargetMode === 'create-new'}
+                        onChange={() => {
+                          setJsonTargetMode('create-new');
+                          setJsonExcludedIds({});
+                        }}
+                      />
+                      Save as a new Exam Head
+                    </label>
+                    {jsonTargetMode === 'create-new' && (
+                      <input
+                        type="text"
+                        value={jsonCustomName}
+                        onChange={(e) => setJsonCustomName(e.target.value)}
+                        placeholder="Enter new Exam Head name..."
+                        className="w-full rounded-lg border border-slate-300 px-3 py-2 text-xs text-slate-900 focus:border-indigo-500 focus:outline-none"
+                      />
+                    )}
+                  </div>
+
+                  <div className="grid gap-3 border-t border-slate-100 pt-3 sm:grid-cols-2">
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-600">
+                        Paper Batch Label
+                      </label>
+                      <input
+                        type="text"
+                        value={jsonPaperLabel}
+                        onChange={(e) => setJsonPaperLabel(e.target.value)}
+                        placeholder="e.g., Prelims Set A"
+                        className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-1.5 text-xs text-slate-900 focus:border-indigo-500 focus:outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-600">
+                        Exam Year
+                      </label>
+                      <input
+                        type="text"
+                        maxLength={9}
+                        value={jsonExamYear}
+                        onChange={(e) => setJsonExamYear(e.target.value)}
+                        placeholder="e.g., 2026"
+                        className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-1.5 text-xs text-slate-900 focus:border-indigo-500 focus:outline-none"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {jsonNearDuplicateEntries.length > 0 && (
+                  <div className="rounded-xl border border-amber-200 bg-amber-50/50 p-3 text-xs">
+                    <button
+                      type="button"
+                      onClick={() => setJsonShowNearDupes((prev) => !prev)}
+                      className="flex w-full items-center justify-between font-semibold text-amber-900"
+                    >
+                      <span>
+                        Review {jsonNearDuplicateEntries.length} Near-Duplicate Question(s)
+                      </span>
+                      {jsonShowNearDupes ? (
+                        <ChevronUp className="h-4 w-4" />
+                      ) : (
+                        <ChevronDown className="h-4 w-4" />
+                      )}
+                    </button>
+                    {jsonShowNearDupes && (
+                      <div className="mt-2.5 space-y-2">
+                        {jsonNearDuplicateEntries.map((entry) => (
+                          <label
+                            key={entry.question.id}
+                            className="flex items-start gap-2 rounded-lg border border-amber-200 bg-white p-2"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={!jsonExcludedIds[entry.question.id]}
+                              onChange={(e) =>
+                                setJsonExcludedIds((prev) => ({
+                                  ...prev,
+                                  [entry.question.id]: !e.target.checked,
+                                }))
+                              }
+                              className="mt-0.5"
+                            />
+                            <div>
+                              <p className="font-semibold text-slate-800">{entry.question.text}</p>
+                              <p className="mt-0.5 text-[11px] text-amber-700">
+                                {Math.round(entry.match.similarityScore * 100)}% similar to Pool Q
+                                {entry.match.matchedExistingQuestion.poolNumber}
+                              </p>
+                            </div>
+                          </label>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                <div className="flex items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setJsonPackage(null)}
+                    className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                  >
+                    Choose Different File
+                  </button>
+                  <button
+                    type="button"
+                    disabled={jsonImporting}
+                    onClick={handleCommitJsonImport}
+                    className="rounded-lg bg-emerald-600 px-5 py-2 text-xs font-semibold text-white hover:bg-emerald-700 disabled:bg-slate-300"
+                  >
+                    {jsonImporting
+                      ? 'Importing...'
+                      : `Import & Save (${jsonWillAddCount} New Questions)`}
+                  </button>
+                </div>
               </div>
-            </div>
-          )}
+            )}
+          </div>
         </div>
       )}
     </div>
