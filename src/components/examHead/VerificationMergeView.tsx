@@ -46,6 +46,10 @@ export const VerificationMergeView: React.FC<VerificationMergeViewProps> = ({
   const [creatingNew, setCreatingNew] = useState<boolean>(Boolean(initialCreatingNew));
   const [newHeadName, setNewHeadName] = useState<string>(initialNewHeadName ?? '');
   const [paperLabel, setPaperLabel] = useState<string>(defaultPaperLabel);
+  const [examYear, setExamYear] = useState<string>(() => {
+    const match = defaultPaperLabel.match(/\b(19\d{2}|20\d{2})\b/);
+    return match ? match[1] : String(new Date().getFullYear());
+  });
   const [viewFilter, setViewFilter] = useState<ViewFilter>('duplicates');
 
   const [incoming, setIncoming] = useState<IncomingVerifiedQuestion[]>(() =>
@@ -233,6 +237,7 @@ export const VerificationMergeView: React.FC<VerificationMergeViewProps> = ({
 
       const updatedHead = await appendPaperToExamHead(targetId, keyedIncoming, {
         paperLabel: paperLabel.trim() || 'Imported Paper',
+        examYear: examYear.trim() || undefined,
         parsedCount,
         duplicatesRemoved: duplicatesRemovedCount,
       });
@@ -271,7 +276,7 @@ export const VerificationMergeView: React.FC<VerificationMergeViewProps> = ({
           )}
         </div>
 
-        <div className="mt-4 grid gap-4 sm:grid-cols-2">
+        <div className="mt-4 grid gap-4 sm:grid-cols-3">
           <div>
             <div className="flex items-center justify-between">
               <label className="text-xs font-semibold text-slate-700">Target Exam Head</label>
@@ -319,18 +324,33 @@ export const VerificationMergeView: React.FC<VerificationMergeViewProps> = ({
 
           <div>
             <label className="block text-xs font-semibold text-slate-700">
-              Paper Label / Year
+              Paper Batch Label
             </label>
             <input
               type="text"
               value={paperLabel}
               onChange={(e) => setPaperLabel(e.target.value)}
-              placeholder="e.g., 2024 Prelims Set A"
+              placeholder="e.g., Prelims Set A"
+              className="mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-700">
+              Exam Year
+            </label>
+            <input
+              type="text"
+              maxLength={9}
+              value={examYear}
+              onChange={(e) => setExamYear(e.target.value)}
+              placeholder="e.g., 2026"
               className="mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none"
             />
           </div>
         </div>
 
+        {/* Filter & Summary Bar */}
         <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
           <div className="flex flex-wrap items-center gap-2 text-xs font-semibold">
             <button
@@ -486,6 +506,7 @@ export const VerificationMergeView: React.FC<VerificationMergeViewProps> = ({
                       </span>
                     )}
 
+                    {/* Show read-only Key badge if auto-fetched, or answer selector if missing */}
                     {isMissingAns ? (
                       <select
                         value=""
