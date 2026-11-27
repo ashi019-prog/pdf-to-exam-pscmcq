@@ -11,7 +11,6 @@ import {
   Sparkles,
   TrendingDown,
   TrendingUp,
-  Upload,
 } from 'lucide-react';
 import { ExamResult } from '../../types/exam';
 import { ExamHead } from '../../types/examHead';
@@ -31,7 +30,6 @@ interface HomeAnalyticsTabProps {
   onLaunchMock: (examHeadId?: string) => void;
   onNavigateCreate: () => void;
   onNavigateResults: () => void;
-  onOpenImportModal: () => void;
   onTrySampleExam: () => void;
 }
 
@@ -41,7 +39,6 @@ export const HomeAnalyticsTab: React.FC<HomeAnalyticsTabProps> = ({
   onLaunchMock,
   onNavigateCreate,
   onNavigateResults,
-  onOpenImportModal,
   onTrySampleExam,
 }) => {
   const [filterHeadId, setFilterHeadId] = useState<string>('all');
@@ -74,12 +71,14 @@ export const HomeAnalyticsTab: React.FC<HomeAnalyticsTabProps> = ({
   const wrongPct = totalAnswers > 0 ? Math.round((summary.totalWrong / totalAnswers) * 100) : 0;
   const skippedPct = totalAnswers > 0 ? Math.max(0, 100 - correctPct - wrongPct) : 0;
 
+  // SVG Donut geometry
   const donutRadius = 56;
   const donutCirc = 2 * Math.PI * donutRadius;
   const correctArc = totalAnswers > 0 ? (summary.totalCorrect / totalAnswers) * donutCirc : 0;
   const wrongArc = totalAnswers > 0 ? (summary.totalWrong / totalAnswers) * donutCirc : 0;
   const skippedArc = totalAnswers > 0 ? (summary.totalSkipped / totalAnswers) * donutCirc : 0;
 
+  // SVG Line Chart geometry
   const chartW = 560;
   const chartH = 210;
   const padL = 36;
@@ -117,6 +116,7 @@ export const HomeAnalyticsTab: React.FC<HomeAnalyticsTabProps> = ({
 
   return (
     <div className="space-y-6">
+      {/* Quick Action Strip & Filter */}
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
         <div className="flex flex-wrap items-center gap-2">
           <button
@@ -168,6 +168,7 @@ export const HomeAnalyticsTab: React.FC<HomeAnalyticsTabProps> = ({
         </div>
       </div>
 
+      {/* Empty Onboarding State when 0 attempts exist */}
       {attempts.length === 0 ? (
         <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm sm:p-8">
           <div className="max-w-2xl">
@@ -179,13 +180,11 @@ export const HomeAnalyticsTab: React.FC<HomeAnalyticsTabProps> = ({
               No mock test attempts recorded yet
             </h2>
             <p className="mt-1.5 text-sm text-slate-600">
-              Upload a Kerala PSC PDF question paper and answer key, import a friend&apos;s shared{' '}
-              <code className="rounded bg-slate-100 px-1.5 py-0.5 text-xs">.json</code> exam bank, or
-              try the built-in sample exam to unlock live score trends and accuracy analytics.
+              Upload a PDF question paper and answer key (or import a .json exam bank from the Upload &amp; Create tab), or try the built-in sample exam to unlock live score trends and accuracy analytics.
             </p>
           </div>
 
-          <div className="mt-6 grid gap-4 sm:grid-cols-3">
+          <div className="mt-6 grid gap-4 sm:grid-cols-2">
             <button
               type="button"
               onClick={onNavigateCreate}
@@ -197,20 +196,6 @@ export const HomeAnalyticsTab: React.FC<HomeAnalyticsTabProps> = ({
               <p className="mt-3 text-sm font-bold text-slate-900">Upload First PDF Paper</p>
               <p className="mt-1 text-xs text-slate-500">
                 Convert Malayalam or English question papers + multi-booklet keys into reusable pools.
-              </p>
-            </button>
-
-            <button
-              type="button"
-              onClick={onOpenImportModal}
-              className="flex flex-col items-start rounded-xl border border-slate-200 bg-slate-50/70 p-4 text-left transition hover:border-emerald-300 hover:bg-emerald-50/40"
-            >
-              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-emerald-100 text-emerald-600">
-                <Upload className="h-5 w-5" />
-              </div>
-              <p className="mt-3 text-sm font-bold text-slate-900">Import Shared .json File</p>
-              <p className="mt-1 text-xs text-slate-500">
-                Load an Exam Head or update pack received via WhatsApp, Telegram, or Email.
               </p>
             </button>
 
@@ -231,6 +216,7 @@ export const HomeAnalyticsTab: React.FC<HomeAnalyticsTabProps> = ({
         </div>
       ) : (
         <>
+          {/* A. Top KPI Summary Cards (4-Column Responsive Grid) */}
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
             <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
               <div className="flex items-center justify-between">
@@ -304,7 +290,9 @@ export const HomeAnalyticsTab: React.FC<HomeAnalyticsTabProps> = ({
             </div>
           </div>
 
+          {/* B. Visual Analytics Charts */}
           <div className="grid gap-5 lg:grid-cols-12">
+            {/* Chart 1 — Score & Accuracy Trend */}
             <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm lg:col-span-7">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
@@ -449,7 +437,9 @@ export const HomeAnalyticsTab: React.FC<HomeAnalyticsTabProps> = ({
               )}
             </div>
 
+            {/* Chart 2 & 3 — Answer Distribution + Time Discipline */}
             <div className="flex flex-col gap-5 lg:col-span-5">
+              {/* Answer Distribution Donut */}
               <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
                 <h3 className="text-sm font-bold text-slate-900">Answer Distribution</h3>
                 <div className="mt-4 flex flex-wrap items-center justify-around gap-4">
@@ -538,6 +528,7 @@ export const HomeAnalyticsTab: React.FC<HomeAnalyticsTabProps> = ({
                 </div>
               </div>
 
+              {/* Time Discipline Card */}
               <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
                 <div className="flex items-center justify-between">
                   <h3 className="text-sm font-bold text-slate-900">Time Discipline</h3>
@@ -584,6 +575,7 @@ export const HomeAnalyticsTab: React.FC<HomeAnalyticsTabProps> = ({
         </>
       )}
 
+      {/* C. Exam Head Readiness Summary Table */}
       <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
         <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
           <div className="flex items-center gap-2">
