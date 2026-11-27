@@ -11,7 +11,7 @@ export interface QuestionAttemptStats {
 
 export interface PooledQuestion {
   id: string;
-  poolNumber: number;
+  poolNumber: number; // Sequential 1..N across the entire Exam Head
   paperId: string;
   paperLabel: string;
   text: string;
@@ -28,6 +28,7 @@ export interface PooledQuestion {
 export interface ImportedPaperMeta {
   paperId: string;
   paperLabel: string;
+  examYear?: string;
   importedAt: string;
   parsedCount: number;
   duplicatesRemoved: number;
@@ -35,8 +36,8 @@ export interface ImportedPaperMeta {
 }
 
 export interface ExamHead {
-  id: string;
-  name: string;
+  id: string; // Slugified unique ID, e.g., "village-assistant"
+  name: string; // Display Exam Name, e.g., "Village Assistant"
   createdAt: string;
   updatedAt: string;
   importedPapers: ImportedPaperMeta[];
@@ -46,7 +47,7 @@ export interface ExamHead {
 export interface DuplicateMatch {
   incomingTempId: string;
   matchType: 'exact' | 'near-duplicate' | 'intra-batch';
-  similarityScore: number;
+  similarityScore: number; // 0.0 to 1.0
   matchedExistingQuestion: {
     id: string;
     poolNumber: number;
@@ -81,7 +82,7 @@ export interface MockLaunchConfig {
 export interface SessionQuestion {
   id: string;
   sourcePoolNumber: number;
-  number: number;
+  number: number; // Sequential 1..K within the active exam session
   paperId: string;
   paperLabel: string;
   text: string;
