@@ -1,6 +1,9 @@
 import React, { useMemo, useState } from 'react';
 import {
+  Calendar,
   Check,
+  ChevronDown,
+  ChevronUp,
   Edit3,
   FilePlus2,
   FolderOpen,
@@ -17,6 +20,7 @@ import { ExamResult, OPTION_KEYS, OptionKey } from '../../types/exam';
 import { ExamHead, PooledQuestion } from '../../types/examHead';
 import {
   deleteExamHead,
+  deletePaperBatchFromExamHead,
   deleteQuestionFromExamHead,
   renameExamHead,
   updateQuestionInExamHead,
@@ -60,7 +64,11 @@ export const MockTestsTab: React.FC<MockTestsTabProps> = ({
   const [renameDraft, setRenameDraft] = useState<string>('');
   const [savingRename, setSavingRename] = useState<boolean>(false);
 
+  // Manage Pool Slide-Over Drawer state
   const [managingHeadId, setManagingHeadId] = useState<string | null>(null);
+  const [batchesExpanded, setBatchesExpanded] = useState<boolean>(true);
+  const [confirmDeleteBatchId, setConfirmDeleteBatchId] = useState<string | null>(null);
+  const [deletingBatchId, setDeletingBatchId] = useState<string | null>(null);
   const [poolSearch, setPoolSearch] = useState<string>('');
   const [paperFilter, setPaperFilter] = useState<string>('all');
   const [editingQuestionId, setEditingQuestionId] = useState<string | null>(null);
@@ -68,6 +76,7 @@ export const MockTestsTab: React.FC<MockTestsTabProps> = ({
     text: string;
     options: Record<OptionKey, string>;
     correctOption: OptionKey;
+    explanation: string;
   } | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
 
@@ -76,7 +85,11 @@ export const MockTestsTab: React.FC<MockTestsTabProps> = ({
     const list = examHeads.filter((head) => {
       if (!q) return true;
       if (head.name.toLowerCase().includes(q)) return true;
-      return head.importedPapers.some((p) => p.paperLabel.toLowerCase().includes(q));
+      return head.importedPapers.some(
+        (p) =>
+          p.paperLabel.toLowerCase().includes(q) ||
+          (p.examYear && p.examYear.toLowerCase().includes(q))
+      );
     });
 
     return [...list].sort((a, b) => {
@@ -115,6 +128,7 @@ export const MockTestsTab: React.FC<MockTestsTabProps> = ({
       text: question.text,
       options: { ...question.options },
       correctOption: question.correctOption,
+      explanation: question.explanation ?? '',
     });
   };
 
@@ -126,6 +140,7 @@ export const MockTestsTab: React.FC<MockTestsTabProps> = ({
         text: editDraft.text.trim(),
         options: editDraft.options,
         correctOption: editDraft.correctOption,
+        explanation: editDraft.explanation.trim() || undefined,
       });
       setEditingQuestionId(null);
       setEditDraft(null);
@@ -146,6 +161,20 @@ export const MockTestsTab: React.FC<MockTestsTabProps> = ({
       onDataChanged();
     } finally {
       setBusyId(null);
+    }
+  };
+
+  const handleDeletePaperBatch = async (headId: string, paperId: string) => {
+    setDeletingBatchId(paperId);
+    try {
+      await deletePaperBatchFromExamHead(headId, paperId);
+      setConfirmDeleteBatchId(null);
+      if (paperFilter === paperId) {
+        setPaperFilter('all');
+      }
+      onDataChanged();
+    } finally {
+      setDeletingBatchId(null);
     }
   };
 
@@ -187,7 +216,7 @@ export const MockTestsTab: React.FC<MockTestsTabProps> = ({
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search Exam Heads or paper labels..."
+              placeholder="Search Exam Heads, paper labels, or year..."
               className="w-full rounded-xl border border-slate-300 bg-white py-2 pl-9 pr-3 text-xs text-slate-900 focus:border-indigo-500 focus:outline-none"
             />
           </div>
@@ -331,8 +360,8 @@ export const MockTestsTab: React.FC<MockTestsTabProps> = ({
                   <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] font-semibold text-slate-600">
                     <span className="inline-flex items-center gap-1 rounded-md bg-slate-100 px-2 py-0.5">
                       <Layers className="h-3 w-3 text-slate-500" />
-                      {head.importedPapers.length} Paper
-                      {head.importedPapers.length === 1 ? '' : 's'}
+                      {head.importedPapers.length} Batch
+                      {head.importedPapers.length === 1 ? '' : 'es'}
                     </span>
                     <span className="text-slate-400">•</span>
                     <span>
@@ -419,6 +448,8 @@ export const MockTestsTab: React.FC<MockTestsTabProps> = ({
                       type="button"
                       onClick={() => {
                         setManagingHeadId(head.id);
+                        setBatchesExpanded(true);
+                        setConfirmDeleteBatchId(null);
                         setPoolSearch('');
                         setPaperFilter('all');
                         setEditingQuestionId(null);
@@ -469,6 +500,7 @@ export const MockTestsTab: React.FC<MockTestsTabProps> = ({
         </div>
       )}
 
+      {/* Manage Pool & Paper Batches Slide-Over Drawer */}
       {managingHead && (
         <div className="fixed inset-0 z-50 flex justify-end bg-slate-900/40 backdrop-blur-sm">
           <div className="flex h-full w-full max-w-2xl flex-col bg-white shadow-2xl">
@@ -479,7 +511,8 @@ export const MockTestsTab: React.FC<MockTestsTabProps> = ({
                 </h3>
                 <p className="text-xs text-slate-500">
                   {managingHead.questions.length} stored questions •{' '}
-                  {managingHead.importedPapers.length} merged papers
+                  {managingHead.importedPapers.length} paper batch
+                  {managingHead.importedPapers.length === 1 ? '' : 'es'}
                 </p>
               </div>
               <button
@@ -491,36 +524,124 @@ export const MockTestsTab: React.FC<MockTestsTabProps> = ({
               </button>
             </div>
 
-            <div className="space-y-3 border-b border-slate-100 bg-slate-50 px-5 py-3.5">
-              <div className="flex flex-wrap items-center gap-2">
+            {/* Collapsible Saved Paper Batches Section */}
+            <div className="border-b border-slate-200 bg-slate-50 px-5 py-3">
+              <div className="flex items-center justify-between">
                 <button
                   type="button"
-                  onClick={() => setPaperFilter('all')}
-                  className={`rounded-full px-3 py-1 text-xs font-semibold transition ${
-                    paperFilter === 'all'
-                      ? 'bg-indigo-600 text-white'
-                      : 'border border-slate-200 bg-white text-slate-700 hover:bg-slate-100'
-                  }`}
+                  onClick={() => setBatchesExpanded((prev) => !prev)}
+                  className="inline-flex items-center gap-1.5 text-xs font-bold text-slate-800 hover:text-indigo-700"
                 >
-                  All Papers ({managingHead.questions.length})
+                  <Layers className="h-4 w-4 text-indigo-600" />
+                  <span>
+                    Saved Paper Batches ({managingHead.importedPapers.length})
+                  </span>
+                  {batchesExpanded ? (
+                    <ChevronUp className="h-4 w-4 text-slate-500" />
+                  ) : (
+                    <ChevronDown className="h-4 w-4 text-slate-500" />
+                  )}
                 </button>
-                {managingHead.importedPapers.map((p) => (
-                  <button
-                    key={p.paperId}
-                    type="button"
-                    onClick={() => setPaperFilter(p.paperId)}
-                    className={`rounded-full px-3 py-1 text-xs font-semibold transition ${
-                      paperFilter === p.paperId
-                        ? 'bg-indigo-600 text-white'
-                        : 'border border-slate-200 bg-white text-slate-700 hover:bg-slate-100'
-                    }`}
-                  >
-                    {p.paperLabel} ({p.addedCount})
-                  </button>
-                ))}
+                <button
+                  type="button"
+                  onClick={() => setBatchesExpanded((prev) => !prev)}
+                  className="text-[11px] font-semibold text-slate-500 hover:text-slate-800"
+                >
+                  {batchesExpanded ? 'Minimize' : 'Expand'}
+                </button>
               </div>
 
-              <div className="relative">
+              {batchesExpanded && (
+                <div className="mt-2.5 max-h-48 space-y-2 overflow-y-auto pr-1">
+                  <button
+                    type="button"
+                    onClick={() => setPaperFilter('all')}
+                    className={`w-full rounded-lg border px-3 py-1.5 text-left text-xs font-semibold transition ${
+                      paperFilter === 'all'
+                        ? 'border-indigo-500 bg-indigo-50 text-indigo-800'
+                        : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-100'
+                    }`}
+                  >
+                    Show All Batches ({managingHead.questions.length} questions)
+                  </button>
+
+                  {managingHead.importedPapers.map((p) => {
+                    const liveCount = managingHead.questions.filter(
+                      (q) => q.paperId === p.paperId
+                    ).length;
+                    const isSelected = paperFilter === p.paperId;
+                    const isConfirming = confirmDeleteBatchId === p.paperId;
+
+                    return (
+                      <div
+                        key={p.paperId}
+                        className={`rounded-xl border p-2.5 text-xs transition ${
+                          isSelected
+                            ? 'border-indigo-400 bg-indigo-50/70'
+                            : 'border-slate-200 bg-white'
+                        }`}
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setPaperFilter(p.paperId)}
+                            className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                          >
+                            <span className="truncate font-bold text-slate-900">
+                              {p.paperLabel}
+                            </span>
+                            {p.examYear && (
+                              <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-indigo-100 px-2 py-0.5 text-[10px] font-bold text-indigo-800">
+                                <Calendar className="h-2.5 w-2.5" />
+                                {p.examYear}
+                              </span>
+                            )}
+                            <span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-600">
+                              {liveCount} Qs
+                            </span>
+                          </button>
+
+                          {isConfirming ? (
+                            <div className="flex items-center gap-1.5">
+                              <span className="text-[11px] font-semibold text-rose-800">
+                                Remove {liveCount} Qs?
+                              </span>
+                              <button
+                                type="button"
+                                disabled={deletingBatchId === p.paperId}
+                                onClick={() =>
+                                  void handleDeletePaperBatch(managingHead.id, p.paperId)
+                                }
+                                className="rounded-md bg-rose-600 px-2 py-0.5 text-[11px] font-semibold text-white hover:bg-rose-700 disabled:bg-rose-300"
+                              >
+                                {deletingBatchId === p.paperId ? 'Removing...' : 'Confirm'}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setConfirmDeleteBatchId(null)}
+                                className="rounded-md border border-slate-300 bg-white px-2 py-0.5 text-[11px] font-semibold text-slate-700"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => setConfirmDeleteBatchId(p.paperId)}
+                              className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2 py-1 text-[11px] font-semibold text-rose-700 hover:bg-rose-100"
+                            >
+                              <Trash2 className="h-3 w-3" />
+                              Remove Batch
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              <div className="relative mt-3">
                 <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
                 <input
                   type="text"
@@ -532,6 +653,7 @@ export const MockTestsTab: React.FC<MockTestsTabProps> = ({
               </div>
             </div>
 
+            {/* Scrollable Question List */}
             <div className="flex-1 space-y-3 overflow-y-auto p-5">
               {drawerQuestions.length === 0 ? (
                 <p className="py-10 text-center text-xs text-slate-500">
@@ -651,6 +773,20 @@ export const MockTestsTab: React.FC<MockTestsTabProps> = ({
                                 </option>
                               ))}
                             </select>
+                          </div>
+                          <div>
+                            <label className="block text-[11px] font-semibold text-slate-600">
+                              Explanation / Solution Note (Optional)
+                            </label>
+                            <textarea
+                              rows={2}
+                              value={editDraft.explanation}
+                              onChange={(e) =>
+                                setEditDraft({ ...editDraft, explanation: e.target.value })
+                              }
+                              placeholder="Add step-by-step math solution or study note..."
+                              className="mt-1 w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs text-slate-900 focus:border-indigo-500 focus:outline-none"
+                            />
                           </div>
                         </div>
                       ) : (
