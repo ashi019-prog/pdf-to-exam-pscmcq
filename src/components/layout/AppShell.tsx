@@ -8,7 +8,6 @@ import {
   GraduationCap,
   Play,
   Trash2,
-  Upload,
 } from 'lucide-react';
 import { ExamQuestion, ExamResult } from '../../types/exam';
 import { ExamHead } from '../../types/examHead';
@@ -18,8 +17,6 @@ import { localFolderStorage } from '../../services/localFolderStorage';
 import { FolderStatusBadge } from '../storage/FolderStatusBadge';
 import { ExamWorkspace } from '../exam/ExamWorkspace';
 import { MockExamLauncher } from '../launcher/MockExamLauncher';
-import { ExportShareModal } from '../sharing/ExportShareModal';
-import { ImportExamModal } from '../sharing/ImportExamModal';
 import { HomeAnalyticsTab } from '../tabs/HomeAnalyticsTab';
 import { UploadCreateTab } from '../tabs/UploadCreateTab';
 import { MockTestsTab } from '../tabs/MockTestsTab';
@@ -84,12 +81,11 @@ export const AppShell: React.FC = () => {
   const [storageAttempts, setStorageAttempts] = useState<ExamResult[]>([]);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
+  // Cross-tab preselection & launcher modal state
   const [launcherOpen, setLauncherOpen] = useState<boolean>(false);
   const [launcherHeadId, setLauncherHeadId] = useState<string | null>(null);
-  const [importModalOpen, setImportModalOpen] = useState<boolean>(false);
-  const [shareHead, setShareHead] = useState<ExamHead | null>(null);
-  const [shareDefaultMode, setShareDefaultMode] = useState<'full' | 'update'>('full');
   const [preselectedCreateHeadId, setPreselectedCreateHeadId] = useState<string | null>(null);
+  const [preselectedCreateMode, setPreselectedCreateMode] = useState<'pdf' | 'import-json'>('pdf');
 
   const prevPhaseRef = useRef(phase);
 
@@ -119,6 +115,7 @@ export const AppShell: React.FC = () => {
     }
   }, []);
 
+  // Sync URL hash changes (GitHub Pages safe)
   useEffect(() => {
     if (typeof window === 'undefined') return;
     if (!window.location.hash) {
@@ -131,6 +128,7 @@ export const AppShell: React.FC = () => {
     return () => window.removeEventListener('hashchange', handleHashChange);
   }, []);
 
+  // Load Exam Heads & attempt history + subscribe to storage updates
   useEffect(() => {
     void localFolderStorage.checkStoredFolder().then(() => {
       void refreshData();
@@ -141,6 +139,7 @@ export const AppShell: React.FC = () => {
     return unsub;
   }, [refreshData]);
 
+  // Watch phase transitions: entering 'exam' opens fullscreen; finishing 'exam' -> 'results' navigates to Tab 4
   useEffect(() => {
     const prevPhase = prevPhaseRef.current;
     prevPhaseRef.current = phase;
@@ -212,6 +211,7 @@ export const AppShell: React.FC = () => {
     setInExamFullscreen(true);
   };
 
+  // Distraction-Free Full-Screen Active Exam Mode
   if (phase === 'exam' && inExamFullscreen && questions.length > 0) {
     return <ExamWorkspace />;
   }
@@ -253,6 +253,7 @@ export const AppShell: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">
+      {/* Desktop Fixed Left Sidebar (240px wide, >= 1024px) */}
       <aside className="fixed inset-y-0 left-0 z-30 hidden w-60 flex-col border-r border-slate-200 bg-white lg:flex">
         <div className="flex h-16 items-center gap-2.5 border-b border-slate-100 px-5">
           <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-indigo-600 text-white shadow-sm">
@@ -301,7 +302,9 @@ export const AppShell: React.FC = () => {
         </nav>
       </aside>
 
+      {/* Main Content Wrapper */}
       <div className="flex min-h-screen flex-col pb-20 lg:pb-0 lg:pl-60">
+        {/* Slim Top Utility Bar */}
         <header className="sticky top-0 z-20 flex h-16 items-center justify-between gap-3 border-b border-slate-200 bg-white/95 px-4 backdrop-blur sm:px-6">
           <div className="flex items-center gap-2.5 min-w-0">
             <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-indigo-600 text-white lg:hidden">
@@ -314,17 +317,10 @@ export const AppShell: React.FC = () => {
 
           <div className="flex items-center gap-2">
             <FolderStatusBadge onStatusToast={showToast} />
-            <button
-              type="button"
-              onClick={() => setImportModalOpen(true)}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50"
-            >
-              <Upload className="h-3.5 w-3.5 text-indigo-600" />
-              <span className="hidden sm:inline">Import File</span>
-            </button>
           </div>
         </header>
 
+        {/* Resume Active Exam Amber Banner */}
         {hasUnfinishedExam && (
           <div className="border-b border-amber-200 bg-amber-50 px-4 py-3 sm:px-6">
             <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3">
@@ -356,6 +352,7 @@ export const AppShell: React.FC = () => {
           </div>
         )}
 
+        {/* Toast Notification */}
         {toastMessage && (
           <div className="mx-auto mt-3 w-full max-w-6xl px-4 sm:px-6">
             <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-xs font-semibold text-emerald-800 shadow-sm">
@@ -364,15 +361,18 @@ export const AppShell: React.FC = () => {
           </div>
         )}
 
+        {/* Active Tab View */}
         <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-6 sm:px-6">
           {activeTab === 'home' && (
             <HomeAnalyticsTab
               examHeads={examHeads}
               attempts={mergedAttempts}
               onLaunchMock={handleOpenLauncher}
-              onNavigateCreate={() => navigateTab('create')}
+              onNavigateCreate={() => {
+                setPreselectedCreateMode('pdf');
+                navigateTab('create');
+              }}
               onNavigateResults={() => navigateTab('results')}
-              onOpenImportModal={() => setImportModalOpen(true)}
               onTrySampleExam={handleTrySampleExam}
             />
           )}
@@ -381,14 +381,11 @@ export const AppShell: React.FC = () => {
             <UploadCreateTab
               examHeads={examHeads}
               preselectedExamHeadId={preselectedCreateHeadId}
+              initialMode={preselectedCreateMode}
               onDataChanged={() => {
                 void refreshData();
               }}
               onLaunchMock={(headId) => handleOpenLauncher(headId)}
-              onShareExamHead={(head, mode) => {
-                setShareHead(head);
-                setShareDefaultMode(mode);
-              }}
             />
           )}
 
@@ -399,11 +396,13 @@ export const AppShell: React.FC = () => {
               onLaunchMock={(headId) => handleOpenLauncher(headId)}
               onAddPaperToHead={(headId) => {
                 setPreselectedCreateHeadId(headId ?? null);
+                setPreselectedCreateMode('pdf');
                 navigateTab('create');
               }}
-              onShareExamHead={(head, mode) => {
-                setShareHead(head);
-                setShareDefaultMode(mode);
+              onImportToHead={(headId) => {
+                setPreselectedCreateHeadId(headId);
+                setPreselectedCreateMode('import-json');
+                navigateTab('create');
               }}
               onDataChanged={() => {
                 void refreshData();
@@ -421,6 +420,7 @@ export const AppShell: React.FC = () => {
         </main>
       </div>
 
+      {/* Mobile / Tablet Fixed Bottom Navigation Bar (< 1024px) */}
       <nav className="fixed inset-x-0 bottom-0 z-30 grid grid-cols-4 border-t border-slate-200 bg-white lg:hidden">
         {navItems.map((item) => {
           const isActive = activeTab === item.id;
@@ -447,30 +447,11 @@ export const AppShell: React.FC = () => {
         })}
       </nav>
 
+      {/* Shared Modals */}
       <MockExamLauncher
         open={launcherOpen}
         initialExamHeadId={launcherHeadId}
         onClose={() => setLauncherOpen(false)}
-      />
-
-      <ExportShareModal
-        open={shareHead !== null}
-        examHead={shareHead}
-        defaultMode={shareDefaultMode}
-        onClose={() => setShareHead(null)}
-      />
-
-      <ImportExamModal
-        open={importModalOpen}
-        onClose={() => {
-          setImportModalOpen(false);
-          void refreshData();
-        }}
-        onImportedAndLaunch={(examHeadId) => {
-          setImportModalOpen(false);
-          void refreshData();
-          handleOpenLauncher(examHeadId);
-        }}
       />
     </div>
   );
