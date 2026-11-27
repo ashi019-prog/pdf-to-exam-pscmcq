@@ -1,5 +1,9 @@
 import { ExamHead } from '../types/examHead';
-import { ExamSharePackage, ShareableQuestion } from '../types/sharePackage';
+import {
+  ExamSharePackage,
+  FullBackupPackage,
+  ShareableQuestion,
+} from '../types/sharePackage';
 
 export type ShareChannel = 'whatsapp' | 'telegram' | 'email';
 
@@ -8,6 +12,9 @@ export interface BuildSharePackageOptions {
   selectedPaperIds?: string[];
 }
 
+/**
+ * Builds a clean, self-contained shareable ExamSharePackage with personal practice stats stripped.
+ */
 export function buildSharePackage(
   examHead: ExamHead,
   options: BuildSharePackageOptions
@@ -61,6 +68,32 @@ export function buildSharePackage(
   };
 }
 
+/**
+ * Builds a single JSON backup package containing ALL non-empty Exam Heads and their questions/answers.
+ */
+export function buildFullBackupPackage(examHeads: ExamHead[]): FullBackupPackage {
+  const nonEmptyHeads = examHeads.filter((h) => h.questions.length > 0);
+  if (nonEmptyHeads.length === 0) {
+    throw new Error('There are no Exam Heads with questions to export.');
+  }
+
+  const packages: ExamSharePackage[] = nonEmptyHeads.map((head) =>
+    buildSharePackage(head, { mode: 'full' })
+  );
+  const totalQuestions = packages.reduce((sum, p) => sum + p.questionCount, 0);
+
+  return {
+    schema: 'mcq-full-backup-v1',
+    exportedAt: new Date().toISOString(),
+    examHeadCount: packages.length,
+    totalQuestions,
+    examHeads: packages,
+  };
+}
+
+/**
+ * Generates a clean, readable filename for the exported JSON package.
+ */
 export function generateShareFilename(pkg: ExamSharePackage): string {
   const safeName =
     pkg.examHeadName
@@ -70,6 +103,11 @@ export function generateShareFilename(pkg: ExamSharePackage): string {
   const tag = pkg.exportType === 'update' ? 'Update' : 'Full';
   const datePart = (pkg.exportedAt || new Date().toISOString()).slice(0, 10);
   return `${safeName}_${tag}_${pkg.questionCount}Q_${datePart}.json`;
+}
+
+export function generateFullBackupFilename(backup: FullBackupPackage): string {
+  const datePart = (backup.exportedAt || new Date().toISOString()).slice(0, 10);
+  return `All_Exam_Heads_Backup_${backup.examHeadCount}Heads_${backup.totalQuestions}Q_${datePart}.json`;
 }
 
 export function createJsonFile(pkg: ExamSharePackage): File {
@@ -97,6 +135,31 @@ export function downloadShareFile(pkg: ExamSharePackage): string {
   document.body.removeChild(link);
   URL.revokeObjectURL(url);
   return filename;
+}
+
+export function downloadFullBackupFile(examHeads: ExamHead[]): {
+  filename: string;
+  examHeadCount: number;
+  totalQuestions: number;
+} {
+  const backup = buildFullBackupPackage(examHeads);
+  const filename = generateFullBackupFilename(backup);
+  const blob = new Blob([JSON.stringify(backup, null, 2)], {
+    type: 'application/json;charset=utf-8;',
+  });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+  return {
+    filename,
+    examHeadCount: backup.examHeadCount,
+    totalQuestions: backup.totalQuestions,
+  };
 }
 
 export function canUseNativeFileShare(file: File): boolean {
