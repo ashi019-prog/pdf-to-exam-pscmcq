@@ -15,6 +15,9 @@ function generateId(): string {
   return `q-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+/**
+ * Normalizes any stored ExamHead JSON (including earlier ExamHeadFile format) into the unified ExamHead schema.
+ */
 function normalizeStoredExamHead(raw: unknown): ExamHead | null {
   if (!raw || typeof raw !== 'object') return null;
   const obj = raw as Record<string, unknown>;
@@ -42,6 +45,7 @@ function normalizeStoredExamHead(raw: unknown): ExamHead | null {
     return {
       paperId: typeof rec.paperId === 'string' ? rec.paperId : generateId(),
       paperLabel: typeof rec.paperLabel === 'string' ? rec.paperLabel : 'Imported Paper',
+      examYear: typeof rec.examYear === 'string' && rec.examYear.trim() ? rec.examYear.trim() : undefined,
       importedAt: typeof rec.importedAt === 'string' ? rec.importedAt : createdAt,
       parsedCount: typeof rec.parsedCount === 'number' ? rec.parsedCount : count,
       duplicatesRemoved: typeof rec.duplicatesRemoved === 'number' ? rec.duplicatesRemoved : 0,
@@ -141,6 +145,9 @@ export async function getExamHead(
   return normalizeStoredExamHead(raw);
 }
 
+/**
+ * Creates a new Exam Head JSON file in exam-heads/. Blocks accidental overwrites of an existing Exam Head.
+ */
 export async function createExamHead(
   name: string,
   adapter: ExamHeadStorageAdapter = defaultAdapter
@@ -172,10 +179,16 @@ export async function createExamHead(
 
 export interface AppendPaperMetaInput {
   paperLabel: string;
+  examYear?: string;
   parsedCount: number;
   duplicatesRemoved: number;
 }
 
+/**
+ * Strictly non-destructive append: loads existing ExamHead, preserves every existing question,
+ * validates all incoming options A–D and embedded correctOption, assigns sequential poolNumber,
+ * verifies merged count, and writes atomically.
+ */
 export async function appendPaperToExamHead(
   examHeadId: string,
   verifiedQuestions: IncomingVerifiedQuestion[],
@@ -187,6 +200,7 @@ export async function appendPaperToExamHead(
     throw new Error(`Exam Head "${examHeadId}" was not found.`);
   }
 
+  // Validate every incoming question has complete options A–D and an embedded correctOption
   for (let i = 0; i < verifiedQuestions.length; i += 1) {
     const q = verifiedQuestions[i];
     if (!q.text.trim()) {
@@ -206,6 +220,7 @@ export async function appendPaperToExamHead(
   const paperId = generateId();
   const paperLabel = paperMetaInput.paperLabel.trim() || 'Imported Paper';
 
+  // Shallow-clone existing questions without modifying or dropping any stored item
   const preservedExisting: PooledQuestion[] = existing.questions.map((q) => ({ ...q }));
   const startPoolNum = preservedExisting.length + 1;
 
@@ -235,13 +250,23 @@ export async function appendPaperToExamHead(
 
   const mergedQuestions = [...preservedExisting, ...newPooledQuestions];
 
+  // Strict non-destructive safety invariant
   if (mergedQuestions.length !== existing.questions.length + newPooledQuestions.length) {
     throw new Error('Non-destructive merge assertion failed: question count mismatch.');
   }
 
+  const detectedYearMatch = paperLabel.match(/\b(19\d{2}|20\d{2})\b/);
+  const resolvedExamYear =
+    paperMetaInput.examYear && paperMetaInput.examYear.trim()
+      ? paperMetaInput.examYear.trim()
+      : detectedYearMatch
+      ? detectedYearMatch[1]
+      : undefined;
+
   const paperRecord: ImportedPaperMeta = {
     paperId,
     paperLabel,
+    examYear: resolvedExamYear,
     importedAt: now,
     parsedCount: paperMetaInput.parsedCount,
     duplicatesRemoved: paperMetaInput.duplicatesRemoved,
@@ -388,6 +413,35 @@ export async function renameExamHead(
     name: trimmed,
     updatedAt: new Date().toISOString(),
   };
+  await adapter.writeRaw(existing.id, updated);
+  return updated;
+}
+
+export async function deletePaperBatchFromExamHead(
+  examHeadId: string,
+  paperId: string,
+  adapter: ExamHeadStorageAdapter = defaultAdapter
+): Promise<ExamHead> {
+  const existing = await getExamHead(examHeadId, adapter);
+  if (!existing) {
+    throw new Error(`Exam Head "${examHeadId}" was not found.`);
+  }
+
+  const remainingPapers = existing.importedPapers.filter((p) => p.paperId !== paperId);
+  const remainingQuestions = existing.questions
+    .filter((q) => q.paperId !== paperId)
+    .map((q, idx) => ({
+      ...q,
+      poolNumber: idx + 1,
+    }));
+
+  const updated: ExamHead = {
+    ...existing,
+    updatedAt: new Date().toISOString(),
+    importedPapers: remainingPapers,
+    questions: remainingQuestions,
+  };
+
   await adapter.writeRaw(existing.id, updated);
   return updated;
 }
