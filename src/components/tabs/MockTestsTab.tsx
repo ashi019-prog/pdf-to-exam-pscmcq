@@ -10,7 +10,8 @@ import {
   Layers,
   Plus,
   Search,
-  Share2,
+  Download,
+  Upload,
   Shuffle,
   SlidersHorizontal,
   Trash2,
@@ -25,13 +26,14 @@ import {
   renameExamHead,
   updateQuestionInExamHead,
 } from '../../services/examHeadManager';
+import { buildSharePackage, downloadShareFile } from '../../services/examShareService';
 
 interface MockTestsTabProps {
   examHeads: ExamHead[];
   attempts: ExamResult[];
   onLaunchMock: (examHeadId: string) => void;
   onAddPaperToHead: (examHeadId?: string) => void;
-  onShareExamHead: (examHead: ExamHead, mode: 'full' | 'update') => void;
+  onImportToHead: (examHeadId: string) => void;
   onDataChanged: () => void;
 }
 
@@ -53,7 +55,7 @@ export const MockTestsTab: React.FC<MockTestsTabProps> = ({
   attempts,
   onLaunchMock,
   onAddPaperToHead,
-  onShareExamHead,
+  onImportToHead,
   onDataChanged,
 }) => {
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -204,6 +206,12 @@ export const MockTestsTab: React.FC<MockTestsTabProps> = ({
     } finally {
       setDeletingHeadId(null);
     }
+  };
+
+  const handleExportHead = (head: ExamHead) => {
+    if (head.questions.length === 0) return;
+    const pkg = buildSharePackage(head, { mode: 'full' });
+    downloadShareFile(pkg);
   };
 
   return (
@@ -426,23 +434,31 @@ export const MockTestsTab: React.FC<MockTestsTabProps> = ({
                     Launch Random Mock
                   </button>
 
-                  <div className="grid grid-cols-3 gap-2">
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => onImportToHead(head.id)}
+                      className="inline-flex items-center justify-center gap-1 rounded-lg border border-indigo-200 bg-indigo-50/70 px-2 py-1.5 text-[11px] font-semibold text-indigo-700 hover:bg-indigo-100"
+                    >
+                      <Upload className="h-3.5 w-3.5 text-indigo-600" />
+                      Import Batch
+                    </button>
+                    <button
+                      type="button"
+                      disabled={total === 0}
+                      onClick={() => handleExportHead(head)}
+                      className="inline-flex items-center justify-center gap-1 rounded-lg border border-emerald-200 bg-emerald-50/70 px-2 py-1.5 text-[11px] font-semibold text-emerald-700 hover:bg-emerald-100 disabled:opacity-50"
+                    >
+                      <Download className="h-3.5 w-3.5 text-emerald-600" />
+                      Export .json
+                    </button>
                     <button
                       type="button"
                       onClick={() => onAddPaperToHead(head.id)}
                       className="inline-flex items-center justify-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-[11px] font-semibold text-slate-700 hover:bg-slate-50"
                     >
                       <Plus className="h-3.5 w-3.5 text-indigo-600" />
-                      Add Paper
-                    </button>
-                    <button
-                      type="button"
-                      disabled={total === 0}
-                      onClick={() => onShareExamHead(head, 'full')}
-                      className="inline-flex items-center justify-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-[11px] font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-                    >
-                      <Share2 className="h-3.5 w-3.5 text-emerald-600" />
-                      Share
+                      Add PDF
                     </button>
                     <button
                       type="button"
