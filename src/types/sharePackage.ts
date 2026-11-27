@@ -26,6 +26,18 @@ export interface ExamSharePackage {
   questions: ShareableQuestion[];
 }
 
+export interface FullBackupPackage {
+  schema: 'mcq-full-backup-v1';
+  exportedAt: string;
+  examHeadCount: number;
+  totalQuestions: number;
+  examHeads: ExamSharePackage[];
+}
+
+export type ParsedImportFile =
+  | { kind: 'single'; packageData: ExamSharePackage }
+  | { kind: 'full-backup'; backupData: FullBackupPackage };
+
 export interface ImportAnalysisPreview {
   packageData: ExamSharePackage;
   existingExamHead: ExamHead | null;
